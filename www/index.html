@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Fleet Agent</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect x='2' y='2' width='12' height='12' rx='3' fill='%237fd1ff'/></svg>">
+<link rel="stylesheet" href="/static/css/agent.css">
+</head>
+<body>
+
+<header class="strip">
+  <div class="brand">Fleet Agent</div>
+  <span id="nav-mode-status" class="icon-btn" title="Joystick navigation: off">
+    <svg width="16" height="16" viewBox="0 0 16 16">
+        <path d="M8 1v14M1 8h14M3 3l10 10M13 3L3 13" stroke="#666666"
+              stroke-width="1.6" stroke-linecap="round" fill="none"/>
+    </svg>
+  </span>
+  <div class="link" id="link-state" title="Connection to the Captain web server">
+    <i class="lamp"></i><span id="link-text">Not connected</span>
+  </div>
+   <label class="target hidden" id="target-wrap">Target drone
+  <select id="target"><option value="">none selected</option></select>
+</label>
+  <div class="grow"></div>
+  <span id="who"></span>
+  <button id="logout" class="quiet hidden">Log out</button>
+</header>
+
+<div class="shell">
+  <nav class="rail" id="rail" aria-label="Agent sections">
+    <button class="tab" data-tab="commands" id="tab-btn-commands" disabled><i class="lamp off" id="lamp-commands"></i>Commands</button>
+    <button class="tab" data-tab="voice"><i class="lamp" id="lamp-voice"></i>Voice</button>
+    <button class="tab" data-tab="joystick" id="tab-btn-joystick" disabled title="No joystick detected on this laptop"><i class="lamp" id="lamp-joystick"></i>Joystick</button>
+    <button class="tab" data-tab="settings"><i class="lamp off"></i>Settings</button>
+    <button class="tab" data-tab="register" id="tab-btn-register" disabled title="Only a Captain admin can register users"><i class="lamp off"></i>Register user</button>
+  </nav>
+
+  <main id="stage">
+    <div id="toasts" aria-live="polite"></div>
+
+    <!-- Log in -->
+    <section id="view-login" class="view hidden">
+      <h1>Connect to Captain</h1>
+      <p class="lede">Sign in with your Captain account. Commands from this laptop run with your account's role, and everything is logged under your name.</p>
+      <form id="login-form" class="stack narrow" autocomplete="off">
+        <label>Captain address
+          <input id="login-url" type="url" placeholder="http://192.168.1.20:8766" required>
+        </label>
+        <label>Username <input id="login-user" required autocomplete="username"></label>
+        <label>Password <input id="login-pass" type="password" required autocomplete="current-password"></label>
+        <p class="err" id="login-err" role="alert"></p>
+        <button class="primary" id="login-btn">Connect</button>
+      </form>
+    </section>
+
+    <!-- Commands -->
+    <section id="view-commands" class="view hidden">
+      <div class="row" style="justify-content: space-between; align-items: baseline; margin-bottom: 8px;">
+        <h1>Commands</h1>
+        <button id="btn-refresh-captain" class="quiet" title="Re-fetch commands and settings from Captain">⟳ Refresh from Captain</button>
+      </div>
+      <p class="lede">Commands and their assigned voice triggers and joystick buttons, loaded from Captain's database (<code style="color: var(--accent);">agent_settings</code>). Click Execute to send directly to your target drone.</p>
+
+    
+
+      <!-- Assigned Commands Table -->
+      <div class="card">
+        <h2>Assigned Commands (Voice & Joystick)</h2>
+        <p class="muted small" style="margin-bottom: 12px;">These commands and assignments are queried directly from Captain on login and updated live.</p>
+        
+        <div class="tbl-wrap">
+          <table class="tbl" id="commands-table">
+            <thead>
+              <tr>
+                <th>Action</th>
+                <th>MAVLink ID</th>
+                <th>Joystick Button</th>
+                <th>Voice Command Trigger</th>
+                <th>Safety Mode</th>
+                <th style="text-align: right;">Execute</th>
+              </tr>
+            </thead>
+            <tbody id="commands-tbody">
+              <tr><td colspan="6" class="muted" style="text-align: center; padding: 20px;">Connecting to Captain to retrieve command assignments…</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div id="cmd-confirm-bar" class="confirm hidden" style="margin-top: 14px;">
+          <span id="cmd-confirm-text"></span>
+          <button class="primary" id="cmd-confirm-yes">Confirm</button>
+          <button id="cmd-confirm-no">Cancel</button>
+        </div>
+      </div>
+
+      <div class="cols">
+        <div class="card">
+          <h2>Custom MAVLink Command</h2>
+          <p class="muted small">Send any MAVLink COMMAND_LONG supported by Captain.</p>
+          <form id="cmd-custom-form" class="stack">
+            <div class="grid">
+              <label>Command ID <input id="cmd-custom-id" type="number" placeholder="e.g. 22" required></label>
+              <label>Label <input id="cmd-custom-label" placeholder="e.g. Custom Command"></label>
+              <label>Param 1 <input id="cmd-param-1" type="number" step="any" value="0"></label>
+              <label>Param 2 <input id="cmd-param-2" type="number" step="any" value="0"></label>
+              <label>Param 3 <input id="cmd-param-3" type="number" step="any" value="0"></label>
+              <label>Param 4 <input id="cmd-param-4" type="number" step="any" value="0"></label>
+              <label>Param 5 <input id="cmd-param-5" type="number" step="any" value="0"></label>
+              <label>Param 6 <input id="cmd-param-6" type="number" step="any" value="0"></label>
+              <label>Param 7 <input id="cmd-param-7" type="number" step="any" value="0"></label>
+            </div>
+            <div class="row"><button class="primary" id="btn-cmd-custom-send">Send Custom Command</button></div>
+          </form>
+        </div>
+
+        <div class="card">
+          <h2>Command Activity & Audit Log</h2>
+          <p class="muted small">Live log of commands dispatched through Captain.</p>
+          <ol class="log" id="cmd-log" aria-live="polite" style="max-height: 280px;"></ol>
+        </div>
+      </div>
+    </section>
+
+
+    <!-- Voice -->
+    <section id="view-voice" class="view hidden">
+      <h1>Voice control</h1>
+
+      <!-- Voice commands table (moved to top) -->
+      <div class="card">
+        <h2>Registered voice commands</h2>
+        <p class="muted small">
+          Phrases stored locally on this laptop. When spoken and matched, they're
+          sent to Captain as voice-issued commands — no phrase ever leaves the
+          laptop until it fires.
+        </p>
+        <div class="tbl-wrap">
+          <table class="tbl">
+            <thead>
+              <tr>
+                <th>Phrase</th>
+                <th>Action</th>
+                <th>Route</th>
+                <th style="text-align: right;">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="vc-tbody">
+              <tr><td colspan="4" class="muted" style="text-align: center; padding: 16px;">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="row" style="margin-top: 12px;">
+          <button class="primary" id="vc-create">Create Voice Command</button>
+        </div>
+      </div>
+
+      <!-- Hidden editor — shown when "Create Voice Command" or a row's Edit is pressed -->
+      <div id="vc-editor" class="card hidden">
+        <h2 id="vc-editor-title">New voice command</h2>
+        <form id="vc-form" class="stack" autocomplete="off">
+          <label>Command <select id="vc-action"></select></label>
+          <label>Phrase
+            <span class="row tight">
+              <input id="vc-phrase" placeholder="e.g. arm the drone" maxlength="60">
+              <button type="button" id="vc-dictate" class="quiet" title="Dictate the phrase">Dictate</button>
+            </span>
+          </label>
+          <div class="row">
+            <button type="button" id="vc-record">Record voice sample</button>
+            <span class="muted" id="vc-record-state">Optional — verifies the phrase against your enrolled voiceprint.</span>
+          </div>
+          <p class="err" id="vc-err" role="alert"></p>
+          <div class="row">
+            <button class="primary" id="vc-save">Save</button>
+            <button type="button" id="vc-cancel" class="quiet">Cancel</button>
+          </div>
+        </form>
+      </div>
+
+      <!-- Gate + Listening -->
+      <div class="cols">
+        <div class="card" id="gate-card">
+          <h2 id="gate-title">Voice control is locked</h2>
+          <p class="muted" id="gate-sub">Nothing you say will reach a drone until you unlock it.</p>
+          <form id="unlock-form" class="stack">
+            <label id="uf-password-row">Captain password <input id="uf-password" type="password" autocomplete="current-password"></label>
+            <div id="uf-voice-row" class="row hidden">
+              <button type="button" id="uf-voice-btn">Record voice sample</button>
+              <span class="muted" id="uf-voice-state">Speak normally for 3 seconds.</span>
+            </div>
+            <div id="uf-face-row" class="row hidden">
+              <button type="button" id="uf-face-btn">Capture face</button>
+              <span class="muted" id="uf-face-state">Look at the camera.</span>
+            </div>
+            <p class="muted small">Press Enter in the password field to unlock. Voice and face samples unlock automatically once captured.</p>
+            <p class="err" id="unlock-err" role="alert"></p>
+          </form>
+          <div class="row"><button type="button" class="quiet hidden" id="lock-btn">Lock now</button></div>
+        </div>
+
+        <div class="card">
+          <h2>Listening</h2>
+          <div class="row">
+            <label class="inline">Speech engine <select id="stt-engine"></select></label>
+            <button id="listen-btn">Start listening</button>
+          </div>
+          <p class="muted" id="listen-note"></p>
+          <div id="confirm-bar" class="confirm hidden">
+            <span id="confirm-text"></span>
+            <button class="primary" id="confirm-yes">Confirm</button>
+            <button id="confirm-no">Cancel</button>
+          </div>
+          <ol class="log" id="heard" aria-live="polite"></ol>
+        </div>
+      </div>
+
+      <details class="help">
+        <summary>What you can say</summary>
+        <p>Start with the wake word (default "captain"), then one of: <b>land</b>, <b>return home</b>, <b>hold</b>, <b>pause mission</b>, <b>resume mission</b> — these run at once. <b>arm</b>, <b>disarm</b> and <b>takeoff</b> wait for you to say "confirm" (or press Confirm). Add "drone 2" to pick a drone; otherwise the target drone above is used. Custom phrases registered above are matched first.</p>
+      </details>
+    </section>
+
+
+
+    <!-- Joystick -->
+    <section id="view-joystick" class="view hidden">
+      <h1>Joystick</h1>
+      <p class="lede" id="pad-name">No joystick detected.</p>
+      <div class="cols pad-cols">
+        <div class="card">
+            <svg id="pad" viewBox="0 0 440 150" role="img" aria-label="Live stick and hat positions">
+                <g id="stick-l" transform="translate(80 75)">
+                    <circle class="ring" r="52"/><circle class="dz" r="0"/><circle class="knob" r="9"/>
+                </g>
+                <g id="stick-r" transform="translate(280 75)">
+                    <circle class="ring" r="52"/><circle class="dz" r="0"/><circle class="knob" r="9"/>
+                </g>
+                <g id="dpad" transform="translate(180 75)">
+                    <g class="dp-up"><polygon points="-15,-18 0,-38 15,-18"/></g>
+                    <g class="dp-down"><polygon points="-15,18 0,38 15,18"/></g>
+                    <g class="dp-left"><polygon points="-18,-15 -38,0 -18,15"/></g>
+                    <g class="dp-right"><polygon points="18,-15 38,0 18,15"/></g>
+                    <circle class="dp-center" r="8"/>
+                </g>
+            </svg>
+            <p class="muted small">
+                Sticks are drawn for reference. <b>Hat</b> drives either the bound
+                hat-actions (below) or, in <b>navigate mode</b>, cycles drones on the
+                Captain map.
+            </p>
+            <div class="row" style="margin: 12px 0;">
+                <button class="primary" id="js-save">Save joystick settings to Captain</button>
+                <span class="muted" id="js-saved"></span>
+                <span class="muted" id="js-mode">Navigation off</span>
+            </div>
+            <div id="hold-wrap" class="hold hidden">
+              <span id="hold-label"></span>
+              <div class="bar"><i id="hold-fill"></i>
+              </div>
+            </div>
+        </div>
+        <div class="card">
+          <h2>Buttons</h2>
+          <div id="buttons" class="buttons"></div>
+          <p class="muted small">Press a button on the controller to see which box it is, then choose its action. Arm, disarm and takeoff only send after you hold the button.</p>
+        </div>
+      </div>
+       9*
+    </section>
+
+    <!-- Settings -->
+    <section id="view-settings" class="view hidden">
+      <h1>Settings</h1>
+      <p class="lede">Saved to the Captain database under your account, so any laptop you sign in from gets the same settings back.</p>
+      <div class="card">
+        <h2>Voice and microphone</h2>
+        <div class="grid">
+          <label>Speech engine <select id="s-engine"></select></label>
+          <label>Language <input id="s-lang" placeholder="en-US"></label>
+          <label>Microphone <select id="s-mic"><option value="">System default</option></select></label>
+          <label>Wake word <input id="s-wake" maxlength="24"></label>
+          <label>Re-lock after (minutes) <input id="s-ttl" type="number" min="1" max="60"></label>
+          <label>Confirm window (seconds) <input id="s-confirm" type="number" min="3" max="30"></label>
+        </div>
+        <label class="check"><input type="checkbox" id="s-wake-req"> Require the wake word before every command</label>
+        <fieldset class="factors">
+          <legend>Unlock voice control with</legend>
+          <label class="check"><input type="checkbox" value="password"> Captain password</label>
+          <label class="check"><input type="checkbox" value="voiceprint"> Voiceprint <span class="muted" id="fx-voice"></span></label>
+          <label class="check"><input type="checkbox" value="face"> Face <span class="muted" id="fx-face"></span></label>
+        </fieldset>
+        <label>Captain password <span class="muted small">(only needed to remove an unlock factor while voice control is locked)</span>
+          <input id="s-pass" type="password" autocomplete="current-password"></label>
+        <p class="err" id="s-err" role="alert"></p>
+        <div class="row"><button class="primary" id="s-save-voice">Save voice settings</button><span class="muted" id="s-voice-saved"></span></div>
+      </div>
+      <div class="card">
+        <h2>Camera</h2>
+        <label>Camera used for face checks <select id="s-cam"><option value="">System default</option></select></label>
+        <div class="row"><button class="primary" id="s-save-cam">Save camera</button><span class="muted" id="s-cam-saved"></span></div>
+      </div>
+      <div class="card">
+        <h2>Saved copies</h2>
+        <table class="tbl"><thead><tr><th>Section</th><th>Last saved in Captain</th><th></th></tr></thead><tbody id="saved-rows"></tbody></table>
+        <div class="row"><button id="s-restore">Restore everything from Captain</button></div>
+      </div>
+    </section>
+
+    <!-- Register -->
+    <section id="view-register" class="view hidden">
+      <h1>Users</h1>
+
+      <div class="card">
+        <h2>Users &amp; biometric status</h2>
+        <p class="muted small">
+          Accounts registered on the Captain server, with their biometric enrolment
+          status. Click <b>Update</b> on a row to manage that user's biometrics, or
+          <b>Create account</b> below the table to add a new user.
+        </p>
+        <div class="row">
+          <button type="button" id="reg-fetch-users">Fetch users from Captain</button>
+          <span class="muted" id="reg-fetch-state"></span>
+        </div>
+        <div class="tbl-wrap" style="margin-top: 12px;">
+          <table class="tbl">
+            <thead>
+              <tr>
+                <th>Username</th>
+                <th>Role</th>
+                <th style="text-align: center;">Voice</th>
+                <th style="text-align: center;">Face</th>
+                <th style="text-align: right;">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="reg-users-tbody">
+              <tr><td colspan="5" class="muted" style="text-align: center; padding: 16px;">
+                Click "Fetch users from Captain" to load.
+              </td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="row" style="margin-top: 12px;">
+          <button class="primary" id="r-create">Create account</button>
+        </div>
+      </div>
+
+      <!-- Hidden editor — shown when "Create account" or a row's "Update" is pressed -->
+      <div id="reg-editor" class="hidden">
+        <div class="row" style="justify-content: space-between; align-items: baseline;">
+          <h1 id="reg-editor-title">Create new account</h1>
+          <button type="button" id="reg-editor-close" class="quiet">Cancel</button>
+        </div>
+        <p class="lede" id="reg-editor-lede">
+          Create the Captain account, then enrol the person's face and voice. Only embeddings are stored — never photos or recordings.
+        </p>
+
+        <div class="card step">
+          <h2><span class="n">1</span>Account</h2>
+          <form id="reg-form" class="grid" autocomplete="off">
+            <label>Username <span class="row tight">
+              <input id="r-user" required>
+              <button type="button" id="r-dictate" class="quiet" title="Say the username">Dictate</button>
+            </span></label>
+            <label>Password <input id="r-pass" type="password" autocomplete="new-password"></label>
+            <label>Role <select id="r-role">
+              <option>operator</option><option>supervisor</option>
+              <option>commander</option><option>admin</option>
+            </select></label>
+            <div class="row end"><button class="primary" id="r-save">Save account</button></div>
+          </form>
+          <p class="err" id="r-err" role="alert"></p>
+        </div>
+
+        <div class="cols">
+          <div class="card step">
+            <h2><span class="n">2</span>Face</h2>
+            <p class="muted" id="r-face-note"></p>
+            <video id="r-video" class="preview" autoplay muted playsinline></video>
+            <div class="row"><button id="r-face-go" disabled>Capture face samples</button><span class="muted" id="r-face-prog"></span></div>
+          </div>
+          <div class="card step">
+            <h2><span class="n">3</span>Voice</h2>
+            <p class="muted" id="r-voice-note"></p>
+            <div class="prompt" id="r-voice-prompt">—</div>
+            <div class="row"><button id="r-voice-go" disabled>Record voice samples</button><span class="muted" id="r-voice-prog"></span></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Enrolled for <span id="r-who">—</span></h2>
+          <p class="muted small">Removing a template stops that person from using that factor to unlock voice control.</p>
+          <div class="row"><button id="r-rev-face" class="quiet" disabled>Remove face</button><button id="r-rev-voice" class="quiet" disabled>Remove voice</button></div>
+        </div>
+      </div>
+    </section>
+        
+
+
+  </main>
+</div>
+
+<script type="module" src="/static/js/app.js"></script>
+</body>
+</html>

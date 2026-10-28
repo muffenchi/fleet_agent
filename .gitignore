@@ -1,0 +1,66 @@
+```
+# Python
+__pycache__/
+
+*.pyc
+*.pyo
+*.pyd
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.shm
+*.wal
+*-shm
+*-wal
+.Python
+env/
+venv/
+.venv/
+.ENV
+.ENV.local
+.env
+.env.local
+.env.*
+
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+*.tmp
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# Web files
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build outputs
+dist/
+build/
+*.min.js
+*.min.css
+
+# IDE
+.vscode/
+.idea/
+
+# Mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pytest
+.pytest_cache/
+
+# Coverage
+htmlcov/
+.coverage
+```

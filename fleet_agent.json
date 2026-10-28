@@ -1,0 +1,67 @@
+{
+  "engines": {
+    "__init__.py": "",
+    "face_opencv.py": "",
+    "voice_resemblyzer.py": ""
+  },
+  "tests": {
+    "captain_stubs": {
+      "captain": {
+        "api": {
+          "command_parser.py": "",
+          "fleet_stream.py": ""
+        }
+      },
+      "shared": {
+        "db": {
+          "sqlite_wal.py": ""
+        },
+        "ipc": {
+          "video_shm_layout.py": ""
+        }
+      },
+      "conftest_stubs.py": ""
+    },
+    "run_ui_smoke.sh": "",
+    "test_integration.py": "",
+    "test_units.py": "",
+    "ui_rig.py": "",
+    "ui_smoke.mjs": ""
+  },
+  "www": {
+    "css": {
+      "agent.css": ""
+    },
+    "js": {
+      "stt": {
+        "registry.js": "",
+        "webspeech.js": ""
+      },
+      "api.js": "",
+      "app.js": "",
+      "media.js": "",
+      "pcm-worklet.js": "",
+      "tab_commands.js": "",
+      "tab_joystick.js": "",
+      "tab_register.js": "",
+      "tab_settings.js": "",
+      "tab_voice.js": ""
+    },
+    "index.html": ""
+  },
+  "README.md": "",
+  "__init__.py": "",
+  "__main__.py": "",
+  "biometrics.py": "",
+  "captain_link.py": "",
+  "commands.py": "",
+  "config.py": "",
+  "filetree.py": "",
+  "joystick.py": "",
+  "security.py": "",
+  "server.py": "",
+  "settings_schema.py": "",
+  "test_joystick.py": "",
+  "voice.py": "",
+  "voice_commands.py": ""
+}

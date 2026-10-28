@@ -1,0 +1,109 @@
+# Fleet Agent
+
+The operator-laptop companion to the Capitan web server. It logs in to Captain as the operator, then lets
+them command drones with a **joystick** or **voice** instead of the right-click menu, keeps device
+**settings** in Captain's database, and registers new users with **face and voice** enrolment.
+
+```
+ operator laptop                                             drone companion computer
+┌──────────────────────────────────────────┐              ┌────────────────────────────┐
+│ browser ─► Agent web UI (127.0.0.1:8780) │              │ Capitan web server :8766   │
+│              own HTML / CSS / JS         │              │                            │
+│ Fleet Agent (Python) ───────────────────────────────────►  POST /auth/login          │
+│   • joystick (pygame, background-safe)   │  session     │  WS   /ws/agent  (presence)│
+│   • voice gate + grammar + confirm       │  cookie,     │  POST /command   (commands)│
+│   • face / voiceprint engines            │  in memory   │  GET/PUT /agent/settings   │
+│   • settings sync                        │              │  GET/PUT /agent/biometrics │
+└──────────────────────────────────────────┘              └────────────────────────────┘
+```
+
+## Run it
+
+```
+# 1. Captain side (once): apply the small patch to your tree
+cd <your repo root> && patch -p1 < captain-agent-support.patch
+
+# 2. Laptop
+pip install -r requirements.txt
+python -m fleet_agent --captain http://<drone-ip>:8766
+```
+The console prints a link ending in `?k=<token>` and opens it. The token is per run; opening the plain
+address without it is refused (see Security). `--captain` can also come from `CAPITAN_URL` or an
+`agent.json` (the file Captain's `GET /agent/agent.json` produces) in the working directory or `~/.fleet_agent/`.
+
+## What the Captain header icons do (no new Captain UI code)
+
+| Icon | Behaviour | Where it comes from |
+|---|---|---|
+| `agent-link-status` | green while logged in with the presence socket up | `AGENT_EVENT.CONNECTED/DISCONNECTED` — already in `routes/agent.py` + `app.js` |
+| `joystick-status` | green while a pad is physically detected | `AGENT_EVENT.JOYSTICK`, from the agent's state frames |
+| `agent-cmd-status` | flashes when Captain accepts (green) or rejects (red) a command | `COMMAND_SENT` |
+| `tts-status` | also flashes for **voice** commands | `app.js` already does this for `source === 'voice'` |
+
+The only change to Captain's behaviour is in `server.py`: `/command` now passes the agent's `source_hint`
+("voice" / "joystick") to `command_sent()`, so the voice flash actually happens. If you want `tts-status` to
+flash for joystick commands too, change `source === 'voice'` to `source === 'voice' || source === 'joystick'`
+at `app.js` line ~830.
+
+## Tabs
+- **Voice** — locked until unlocked (below). Wake word (default "captain") → one exact phrase →
+  `land`, `return home`, `hold`, `pause/resume mission` run at once; `arm`, `disarm`, `takeoff` wait for "confirm"
+  (or the Confirm button) for 8 s. "drone 2" picks a drone, otherwise the target selector is used.
+- **Joystick** — enabled only while a pad is detected. Live stick/button view; bind any button to an action.
+  `arm/disarm/takeoff` need the button held (default 800 ms). **Nothing that starts motors is bound by default.**
+- **Settings** — speech engine, language, microphone, wake word, re-lock time, unlock factors, camera; shows what
+  Captain has saved and can restore or reset each section.
+- **Register user** — Captain admins only. Create the account, then enrol face and voice.
+
+## Voice unlock
+Voice stays locked until the operator satisfies **every** factor they chose (default: Captain password):
+`password` (re-checked against Captain), `voiceprint`, `face`. It re-locks after the idle time, on logout or
+session expiry. Removing a factor while locked needs the Captain password; adding one requires an enrolled
+template and an installed engine, so nobody can lock themselves out. Five failed attempts pause unlock for a minute.
+The joystick needs no unlock: commands are only accepted while the hardware is physically present.
+
+## Settings in Captain's database
+`agent_settings (operator, scope, value_json)` — scopes `joystick`, `voice`, `camera`. Saved on every change,
+restored on login, per operator, validated by `settings_schema.py` (unknown keys are dropped). Biometric
+templates live in `agent_biometrics`; only the owner reads their own, only an admin writes or revokes.
+
+## Face and voice engines (optional, loaded if present)
+- **Face**: `pip install opencv-python`, download `face_detection_yunet_2023mar.onnx` and
+  `face_recognition_sface_2021dec.onnx` from the OpenCV model zoo into `~/.fleet_agent/models/`
+  (or set `FLEET_AGENT_YUNET_ONNX` / `FLEET_AGENT_SFACE_ONNX`).
+- **Voice**: `pip install resemblyzer`.
+If one is missing the UI says exactly what to install and the rest of the agent works.
+
+## Adding your own speech-to-text engine
+Create `www/js/stt/<name>.js`, call `registerEngine(name, {label, available, create})` (contract in
+`stt/registry.js`), and import it in `tab_voice.js`. Engines only report transcripts; the agent decides what they mean.
+A server-side engine can post to `/api/voice/transcript` directly.
+
+## Security notes
+- The agent only answers `127.0.0.1`/`localhost:<port>`, checks `Origin`, and needs the per-run token cookie —
+  a web page open in the operator's browser (or DNS rebinding) cannot drive it.
+- The Captain session token stays in the agent process; the browser never sees it.
+- Face and voice are **not liveness-checked**: a photo or recording of the operator can match. Use them as a
+  convenience on top of the Captain login. Thresholds are the libraries' documented starting values — calibrate on your hardware.
+- Templates are embeddings (no photos/audio) but are stored unencrypted in the drone's SQLite — treat as personal data.
+- Captain's `routes/users.py` still lets *any* logged-in account create accounts with any role (its own docstring
+  says to gate it). The Register tab is admin-only, and the biometric endpoints enforce admin server-side, but
+  `POST /auth/users` itself is only as strict as that file.
+
+## Not done / not verified
+- **Sticks do not fly the drone.** Captain's `ALLOWED_MAVLINK_COMMANDS` has no manual-control command; adding one is a
+  separate, safety-critical design. Only buttons send (discrete commands).
+- "Confirmed" means **Captain accepted and published** the command. The browser also waits for the flight controller's
+  `CommandResult` via `/ws/monitor`; the agent deliberately doesn't open that socket.
+- The agent can't see which drone is selected in the Captain map; it has its own target picker, filled from `GET /fleet/state`.
+- The Web Speech engine needs internet in Chrome/Edge. Plan a local engine for field use.
+- `server.py` mentions a `fleet_agent.py` that wasn't uploaded; this project is a fresh implementation — reconcile if one exists.
+- Tested with stand-ins for the files that weren't uploaded (`WalConnection`, `fleet_bus`, `UserStore`, `command_parser`'s
+  policy imports) and **no real joystick, browser speech/camera/microphone, face/voice models, or flight controller**.
+
+## Tests
+```
+python -m pytest tests/test_units.py                                    # no Captain needed
+CAPTAIN_SRC=<patched Captain tree> python -m pytest                   # + end-to-end against the real patched server.py
+CAPTAIN_SRC=... UITEST_DIR=<dir with jsdom+esbuild> sh tests/run_ui_smoke.sh    # UI in jsdom (npm i jsdom esbuild)
+```

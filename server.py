@@ -368,6 +368,9 @@ class NewUserBody(BaseModel):
     username: str; 
     password: str; 
     role: str = "operator"
+class UpdateUserBody(BaseModel):
+    password: Optional[str] = None
+    role:     Optional[str] = None
 class EnrolBody(BaseModel):    
     username: str; 
     kind: str
@@ -387,7 +390,8 @@ class VoiceCommandBody(BaseModel):
     phrase: str
     action: str
     voice_wav_b64: Optional[str] = None
-
+class PreviewBody(BaseModel):
+    data_b64: str
 def create_app(cfg: Config, *, engines: Optional[dict] = None,
                backend_factory: Callable = PygameBackend, guard: Optional[Guard] = None):
     if engines is None:
@@ -796,6 +800,7 @@ def create_app(cfg: Config, *, engines: Optional[dict] = None,
         users = await agent.link.list_users_with_biometrics()
         return [
             {
+                "id":         u.get("id"),
                 "username":   u["username"],
                 "role":       u["role"],
                 "active":     u.get("active", True),
@@ -805,6 +810,64 @@ def create_app(cfg: Config, *, engines: Optional[dict] = None,
            ]
         log.info("GET /api/register/users -> %d user(s)  names=%s", len(mapped), [m["username"] for m in mapped][:5])        # ← at most 5 names, no biometric data
         return mapped   
+
+    @app.post("/api/register/preview")
+    @captain_errors
+    async def reg_preview(body: PreviewBody):
+        """Live face detection for the enrol UI. No storage, no embedding —
+        just 'is a single correctly-sized face in this frame right now?'"""
+        need_admin()
+        engine = agent.engines["face"]["engine"]
+        if engine is None:
+            raise HTTPException(409, agent.engines["face"]["reason"] or "face engine unavailable")
+        detect = getattr(engine, "detect", None)
+        if detect is None:
+            raise HTTPException(409, "face engine does not support preview")
+        result = await run_in_threadpool(detect, _b64(body.data_b64))
+        return result
+
+    @app.patch("/api/register/user/{username}")
+    @captain_errors
+    async def update_register_user(username: str, body: UpdateUserBody):
+        need_admin()
+        users = await agent.link.list_users_with_biometrics()
+        target = next((u for u in users if u["username"] == username), None)
+        if target is None:
+            raise HTTPException(404, f"No such user: {username!r}")
+        if not body.password and not body.role:
+            raise HTTPException(422, "no changes requested")
+        # Same last-active-admin guard Captain enforces; this catches it earlier
+        # with a clearer message before the round-trip.
+        if (body.role and body.role != "admin"
+                and target.get("role") == "admin" and target.get("active")):
+            active_admins = sum(1 for u in users
+                                if u.get("role") == "admin" and u.get("active"))
+            if active_admins <= 1:
+                raise HTTPException(409, "Cannot demote the last active admin account")
+        result = await agent.link.update_user(
+            target["id"], password=body.password, role=body.role,
+        )
+        agent.hub.emit({"type": "register.users.changed"})
+        return {"username": username, "role": result.get("role", target["role"])}
+
+    @app.delete("/api/register/user/{username}")
+    @captain_errors
+    async def delete_register_user(username: str):
+        need_admin()
+        users = await agent.link.list_users_with_biometrics()
+        target = next((u for u in users if u["username"] == username), None)
+        if target is None:
+            raise HTTPException(404, f"No such user: {username!r}")
+        if agent.link.user and agent.link.user["username"] == username:
+            raise HTTPException(409, "You cannot delete your own account")
+        if target.get("role") == "admin" and target.get("active"):
+            active_admins = sum(1 for u in users
+                                if u.get("role") == "admin" and u.get("active"))
+            if active_admins <= 1:
+                raise HTTPException(409, "Cannot delete the last active admin account")
+        await agent.link.delete_user(target["id"])
+        agent.hub.emit({"type": "register.users.changed"})
+        return {"ok": True, "username": username}
 
     @app.post("/api/register/user")
     @captain_errors

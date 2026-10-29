@@ -21,6 +21,8 @@ export function initSettings({ api, state, bus, toast }) {
   function render() {
     const s = state.status;
     if (!s.captain.logged_in) return;
+    const storageUnavailable = !s.settings_storage;
+    const storageMessage = 'Captain does not provide /agent/settings (HTTP 404). Install the Captain agent-settings patch before saving settings.';
     const v = s.settings.voice;
     const eng = $('s-engine');
     eng.replaceChildren(...listEngines().map((e) => new Option(e.label + (e.available ? '' : ' — not available here'), e.name)));
@@ -34,7 +36,10 @@ export function initSettings({ api, state, bus, toast }) {
       if (kind) {
         const e = s.engines[kind];
         box.disabled = !e.available;
-        $(kind === 'voice' ? 'fx-voice' : 'fx-face').textContent = e.available ? '' : `— not available: ${e.reason}`;
+        const requirement = kind === 'voice' ? 'requires a voiceprint enrollment for this account'
+          : 'requires a face enrollment for this account';
+        $(kind === 'voice' ? 'fx-voice' : 'fx-face').textContent = e.available
+          ? `— ${requirement}` : `— not available: ${e.reason}`;
       }
     }
     $('s-voice-saved').textContent = s.saved_ts.voice ? `Saved ${new Date(s.saved_ts.voice / 1000).toLocaleString()}` : 'Not saved yet — using defaults';
@@ -47,16 +52,27 @@ export function initSettings({ api, state, bus, toast }) {
         Object.assign(document.createElement('td'), { textContent: ts ? new Date(ts / 1000).toLocaleString() : 'never — using defaults' }));
       const td = document.createElement('td'), b = document.createElement('button');
       b.textContent = 'Reset to defaults'; b.className = 'quiet';
+      b.disabled = storageUnavailable;
+      if (storageUnavailable) b.title = storageMessage;
       b.addEventListener('click', async () => {
         try { await api('POST', `/api/settings/${scope}/reset`); toast(`${label} reset`, 'good'); } catch (e) { toast(e.message, 'bad'); }
       });
       td.appendChild(b); tr.appendChild(td); rows.appendChild(tr);
     }
-    $('s-err').textContent = s.settings_storage ? '' : 'This Captain has no agent settings storage (the agent patch is not installed). Changes made here will not be kept.';
+    for (const id of ['s-save-voice', 's-save-cam', 's-restore']) {
+      $(id).disabled = storageUnavailable;
+      if (storageUnavailable) $(id).title = storageMessage;
+    }
+    $('s-err').textContent = storageUnavailable ? storageMessage : '';
   }
 
   $('s-save-voice').addEventListener('click', async () => {
     $('s-err').textContent = '';
+    const unlockFactors = factorBoxes().filter((b) => b.checked).map((b) => b.value);
+    if (!unlockFactors.length) {
+      $('s-err').textContent = 'Choose at least one method to unlock voice control.';
+      return;
+    }
     try {
       await api('PUT', '/api/settings/voice', {
         password: $('s-pass').value || null,
@@ -64,7 +80,7 @@ export function initSettings({ api, state, bus, toast }) {
           stt_engine: $('s-engine').value, language: $('s-lang').value.trim(), microphone_id: $('s-mic').value,
           wake_word: $('s-wake').value.trim(), require_wake_word: $('s-wake-req').checked,
           unlock_ttl_s: Number($('s-ttl').value) * 60, confirm_window_s: Number($('s-confirm').value),
-          unlock_factors: factorBoxes().filter((b) => b.checked).map((b) => b.value),
+          unlock_factors: unlockFactors,
         } });
       $('s-pass').value = '';
       toast('Voice settings saved to Captain', 'good');

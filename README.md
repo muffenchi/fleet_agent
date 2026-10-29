@@ -20,7 +20,7 @@ them command drones with a **joystick** or **voice** instead of the right-click 
 ## Run it
 
 ```
-# 1. Captain side (once): apply the small patch to your tree
+# 1. Captain side (once): apply the agent-support patch to the Captain tree
 cd <your repo root> && patch -p1 < captain-agent-support.patch
 
 # 2. Laptop
@@ -53,7 +53,8 @@ at `app.js` line ~830.
   `arm/disarm/takeoff` need the button held (default 800 ms). **Nothing that starts motors is bound by default.**
 - **Settings** — speech engine, language, microphone, wake word, re-lock time, unlock factors, camera; shows what
   Captain has saved and can restore or reset each section.
-- **Register user** — Captain admins only. Create the account, then enrol face and voice.
+- **Register user** — Captain admins only. The signed-in role is shown in the header; operators must ask an
+  admin to create accounts or enrol their face and voice.
 
 ## Voice unlock
 Voice stays locked until the operator satisfies **every** factor they chose (default: Captain password):
@@ -64,13 +65,16 @@ The joystick needs no unlock: commands are only accepted while the hardware is p
 
 ## Settings in Captain's database
 `agent_settings (operator, scope, value_json)` — scopes `joystick`, `voice`, `camera`. Saved on every change,
-restored on login, per operator, validated by `settings_schema.py` (unknown keys are dropped). Biometric
-templates live in `agent_biometrics`; only the owner reads their own, only an admin writes or revokes.
+restored on login, per operator, validated by `settings_schema.py` (unknown keys are dropped). The Captain
+agent-settings patch must be installed in the running Captain server; if the agent reports HTTP 404 for
+`GET /agent/settings`, restart Captain with that patch installed before saving settings. Biometric templates
+live in `agent_biometrics`; only the owner reads their own, only an admin writes or revokes.
 
 ## Face and voice engines (optional, loaded if present)
 - **Face**: `pip install opencv-python`, download `face_detection_yunet_2023mar.onnx` and
-  `face_recognition_sface_2021dec.onnx` from the OpenCV model zoo into `~/.fleet_agent/models/`
-  (or set `FLEET_AGENT_YUNET_ONNX` / `FLEET_AGENT_SFACE_ONNX`).
+  `face_recognition_sface_2021dec.onnx` from the OpenCV model zoo into the project `models/` folder or
+  `~/.fleet_agent/models/` (or set `FLEET_AGENT_YUNET_ONNX` / `FLEET_AGENT_SFACE_ONNX`). Face can be
+  selected as an unlock factor only when this engine is available and an admin has enrolled your face.
 - **Voice**: `pip install resemblyzer`.
 If one is missing the UI says exactly what to install and the rest of the agent works.
 

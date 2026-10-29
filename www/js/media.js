@@ -40,6 +40,19 @@ export function frameFromVideo(video) {
   }, 'image/jpeg', 0.9));
 }
 
+export async function previewFrameFromVideo(video, maxWidth = 480) {
+  const c = document.createElement('canvas');
+  const vw = video.videoWidth  || 640;
+  const vh = video.videoHeight || 480;
+  const scale = Math.min(1, maxWidth / vw);
+  c.width  = Math.round(vw * scale);
+  c.height = Math.round(vh * scale);
+  c.getContext('2d').drawImage(video, 0, 0, c.width, c.height);
+  return new Promise((resolve, reject) => c.toBlob(async (blob) => {
+    if (!blob) return reject(new Error('preview capture failed'));
+    resolve(bytesToB64(new Uint8Array(await blob.arrayBuffer())));
+  }, 'image/jpeg', 0.6));
+}
 // One-off capture for unlocking: open the camera, let exposure settle, grab a frame, close it.
 export async function captureFace(deviceId) {
   const video = document.createElement('video');

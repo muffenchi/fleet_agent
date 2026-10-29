@@ -190,6 +190,18 @@ class CaptainLink:
     async def list_users(self) -> list[dict]:                                                       return await  self.request("GET", "/auth/users")
     async def create_user(self, username: str, password: str, role: str) -> dict:                   return await  self.request("POST", "/auth/users", json={"username": username, "password": password, "role": role})
  
+    async def update_user(self, user_id: int, *, password: Optional[str] = None, role: Optional[str] = None, active: Optional[bool] = None) -> dict:
+        body = {}
+        if password is not None: body["password"] = password
+        if role is not None:     body["role"]     = role
+        if active is not None:   body["active"]   = active
+        if not body:
+            raise CaptainError(422, "no fields to update")
+        return await self.request("PATCH", f"/auth/users/{user_id}", json=body)
+
+    async def delete_user(self, user_id: int) -> dict:
+        return await self.request("DELETE", f"/auth/users/{user_id}")
+
     async def list_users_with_biometrics(self) -> list[dict]:
         """Users + enrolled biometric status, for the agent Register tab."""
         return await self.request("GET", "/agent/biometrics/users")

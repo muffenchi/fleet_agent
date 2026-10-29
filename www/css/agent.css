@@ -81,6 +81,48 @@ details.help { color: var(--muted); max-width: 70ch; } details.help summary { cu
 #gate-card[data-open="true"] h2::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--go); box-shadow: 0 0 8px #35d07f88; margin-right: 10px; }
 #gate-card[data-open="false"] h2::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--warn); margin-right: 10px; }
 
+
+.preview-wrap {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  background: #000;
+  border-radius: 6px;
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+.preview-wrap video {
+  width: 100%; height: 100%;
+  object-fit: cover; display: block;
+}
+.face-guide {
+  position: absolute; inset: 0;
+  pointer-events: none;
+}
+.face-guide ellipse {
+  fill: none;
+  stroke: #f0b43c;
+  stroke-width: 0.4;
+  stroke-dasharray: 1 0.8;
+  transition: stroke 0.15s, stroke-width 0.15s;
+}
+.face-guide.ready ellipse {
+  stroke: var(--go);
+  stroke-width: 0.6;
+  stroke-dasharray: none;
+  filter: drop-shadow(0 0 2px #35d07f99);
+}
+.face-guide-hint {
+  position: absolute;
+  left: 0; right: 0; bottom: 8px;
+  text-align: center;
+  font-size: 12px;
+  color: #fff;
+  text-shadow: 0 1px 3px #000, 0 0 6px #000;
+  transition: color 0.15s;
+}
+.face-guide.ready + .face-guide-hint { color: var(--go); }
+
 /* joystick pad — the memorable element: live sticks, lit buttons */
 #pad { width: 100%; max-width: 420px; display: block; margin: 0 auto 8px; }
 #pad .ring { fill: var(--bg); stroke: var(--line); stroke-width: 2; }
@@ -94,6 +136,24 @@ details.help { color: var(--muted); max-width: 70ch; } details.help summary { cu
 #reg-users-tbody td { vertical-align: middle; }
 #reg-users-tbody .badge {    font-family: var(--mono);    font-size: 12px;}
 #reg-fetch-state { font-family: var(--mono); }
+
+
+
+
+button.danger {  background: #a84b4b;  border-color: #a84b4b;  color: #fff;}
+button.danger:hover:not(:disabled) { background: #c25757; border-color: #c25757; }
+button.danger:disabled {  background: #6b3a3a; border-color: #6b3a3a; color: #999;}
+#reg-editor.hidden { display: none !important; }
+#reg-create-form.hidden,
+#reg-edit-section.hidden { display: none !important; }
+#reg-edit-section .card h3 { margin-top: 0; }
+#r-face-badge.badge.js, #r-voice-badge.badge.js {  color: var(--go); border-color: #35d07f66; background: #35d07f10;}
+#r-face-badge.badge, #r-voice-badge.badge {  margin-left: 8px; font-size: 11px; vertical-align: middle;}
+
+
+
+
+
 
 /* Voice commands table */
 #vc-tbody td { vertical-align: middle; }

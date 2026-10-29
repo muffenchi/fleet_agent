@@ -64,12 +64,15 @@ function render() {
   // the TODO in tab_commands.js sendAction().
 
   // tabs
-  const hasPad = !!s.joystick.present, isAdmin = loggedIn && user.role === 'admin';
+  const hasPad = !!s.joystick.present, isAdmin = loggedIn && user?.role === 'admin';
   $('tab-btn-commands').disabled = !loggedIn;
   $('tab-btn-joystick').disabled = !loggedIn || !hasPad;
   $('tab-btn-joystick').title = hasPad ? '' : (s.joystick.error
     ? `Joystick support unavailable: ${s.joystick.error}` : 'No joystick detected on this laptop');
   $('tab-btn-register').disabled = !isAdmin;
+  $('tab-btn-register').title = isAdmin ? '' : loggedIn
+    ? `Signed in as ${user?.role || 'unknown'}; only a Captain admin can register users`
+    : 'Log in as a Captain admin to register users';
   document.querySelector('.tab[data-tab="voice"]').disabled = !loggedIn;
   document.querySelector('.tab[data-tab="settings"]').disabled = !loggedIn;
   $('lamp-commands').className = 'lamp ' + (loggedIn ? 'go' : 'off');

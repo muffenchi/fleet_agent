@@ -128,100 +128,112 @@
     <section id="view-voice" class="view hidden">
       <h1>Voice control</h1>
 
-      <!-- Voice commands table (moved to top) -->
+      <!-- Gate card — same as before, just moved up -->
+      <div class="card" id="gate-card">
+        <h2 id="gate-title">Voice control is locked</h2>
+        <p class="muted" id="gate-sub">Nothing you say will reach a drone until you unlock it.</p>
+        <form id="unlock-form" class="stack">
+          <label id="uf-password-row">Captain password <input id="uf-password" type="password" autocomplete="current-password"></label>
+          <div id="uf-voice-row" class="row hidden">
+            <button type="button" id="uf-voice-btn">Record voice sample</button>
+            <span class="muted" id="uf-voice-state">Speak normally for 3 seconds.</span>
+          </div>
+          <div id="uf-face-row" class="row hidden">
+            <button type="button" id="uf-face-btn">Capture face</button>
+            <span class="muted" id="uf-face-state">Look at the camera.</span>
+          </div>
+          <p class="muted small">Press Enter in the password field to unlock. Voice and face samples unlock automatically once captured.</p>
+          <p class="err" id="unlock-err" role="alert"></p>
+        </form>
+        <div class="row"><button type="button" class="quiet hidden" id="lock-btn">Lock now</button></div>
+      </div>
+
+      <!-- Single table: every Captain action -->
       <div class="card">
-        <h2>Registered voice commands</h2>
+        <h2>Voice commands</h2>
         <p class="muted small">
-          Phrases stored locally on this laptop. When spoken and matched, they're
-          sent to Captain as voice-issued commands — no phrase ever leaves the
-          laptop until it fires.
+          Every action Captain can perform, with its assigned phrase. Click <b>Set</b> to
+          record a new phrase — the recording is checked against your enrolled voiceprint
+          before saving. Stored locally on this laptop only.
         </p>
         <div class="tbl-wrap">
           <table class="tbl">
             <thead>
               <tr>
+                <th>Command</th>
                 <th>Phrase</th>
-                <th>Action</th>
                 <th>Route</th>
+                <th style="text-align: center;">Confirm</th>
                 <th style="text-align: right;">Actions</th>
               </tr>
             </thead>
             <tbody id="vc-tbody">
-              <tr><td colspan="4" class="muted" style="text-align: center; padding: 16px;">Loading…</td></tr>
+              <tr><td colspan="5" class="muted" style="text-align: center; padding: 16px;">Loading…</td></tr>
             </tbody>
           </table>
         </div>
-        <div class="row" style="margin-top: 12px;">
-          <button class="primary" id="vc-create">Create Voice Command</button>
+      </div>
+
+      <!-- Recorder — appears when Set / Edit is clicked -->
+      <div id="vc-recorder" class="card hidden">
+        <h2 id="vc-recorder-title">Record phrase</h2>
+        <p class="muted small">
+          Say the phrase you want to use for <strong id="vc-target-action">—</strong>.
+          Recording lasts <span id="vc-seconds">3</span>&nbsp;s. Your voice is checked against
+          your enrolled voiceprint; a mismatch is rejected.
+        </p>
+        <div class="prompt" id="vc-recorder-text">—</div>
+        <div class="row">
+          <button class="primary" id="vc-record">Start recording</button>
+          <button type="button" class="quiet" id="vc-cancel">Cancel</button>
+        </div>
+        <p class="muted small" id="vc-record-state"></p>
+        <p class="err" id="vc-err"></p>
+        <div class="row hidden" id="vc-confirm-row">
+          <button class="primary" id="vc-save">Save phrase</button>
+          <button type="button" class="quiet" id="vc-rerecord">Re-record</button>
         </div>
       </div>
 
-      <!-- Hidden editor — shown when "Create Voice Command" or a row's Edit is pressed -->
-      <div id="vc-editor" class="card hidden">
-        <h2 id="vc-editor-title">New voice command</h2>
-        <form id="vc-form" class="stack" autocomplete="off">
-          <label>Command <select id="vc-action"></select></label>
-          <label>Phrase
-            <span class="row tight">
-              <input id="vc-phrase" placeholder="e.g. arm the drone" maxlength="60">
-              <button type="button" id="vc-dictate" class="quiet" title="Dictate the phrase">Dictate</button>
-            </span>
-          </label>
-          <div class="row">
-            <button type="button" id="vc-record">Record voice sample</button>
-            <span class="muted" id="vc-record-state">Optional — verifies the phrase against your enrolled voiceprint.</span>
-          </div>
-          <p class="err" id="vc-err" role="alert"></p>
-          <div class="row">
-            <button class="primary" id="vc-save">Save</button>
-            <button type="button" id="vc-cancel" class="quiet">Cancel</button>
-          </div>
-        </form>
-      </div>
+      <!-- Listening + conversation -->
+      <div class="card">
+        <h2>Listening &amp; conversation</h2>
+        <div class="row">
+          <label class="inline">Speech engine <select id="stt-engine"></select></label>
+          <button id="listen-btn">Start listening</button>
+        </div>
+        <p class="muted" id="listen-note"></p>
 
-      <!-- Gate + Listening -->
-      <div class="cols">
-        <div class="card" id="gate-card">
-          <h2 id="gate-title">Voice control is locked</h2>
-          <p class="muted" id="gate-sub">Nothing you say will reach a drone until you unlock it.</p>
-          <form id="unlock-form" class="stack">
-            <label id="uf-password-row">Captain password <input id="uf-password" type="password" autocomplete="current-password"></label>
-            <div id="uf-voice-row" class="row hidden">
-              <button type="button" id="uf-voice-btn">Record voice sample</button>
-              <span class="muted" id="uf-voice-state">Speak normally for 3 seconds.</span>
-            </div>
-            <div id="uf-face-row" class="row hidden">
-              <button type="button" id="uf-face-btn">Capture face</button>
-              <span class="muted" id="uf-face-state">Look at the camera.</span>
-            </div>
-            <p class="muted small">Press Enter in the password field to unlock. Voice and face samples unlock automatically once captured.</p>
-            <p class="err" id="unlock-err" role="alert"></p>
-          </form>
-          <div class="row"><button type="button" class="quiet hidden" id="lock-btn">Lock now</button></div>
+        <!-- Conversational pending prompt — visible when a command is awaiting confirmation -->
+        <div id="vc-prompt-bar" class="confirm hidden">
+          <span id="vc-prompt-text"></span>
+          <button class="primary" id="vc-prompt-confirm">Confirm</button>
+          <button id="vc-prompt-hold">Hold</button>
+          <button id="vc-prompt-cancel">Cancel</button>
         </div>
 
-        <div class="card">
-          <h2>Listening</h2>
-          <div class="row">
-            <label class="inline">Speech engine <select id="stt-engine"></select></label>
-            <button id="listen-btn">Start listening</button>
-          </div>
-          <p class="muted" id="listen-note"></p>
-          <div id="confirm-bar" class="confirm hidden">
-            <span id="confirm-text"></span>
-            <button class="primary" id="confirm-yes">Confirm</button>
-            <button id="confirm-no">Cancel</button>
-          </div>
-          <ol class="log" id="heard" aria-live="polite"></ol>
+        <div id="confirm-bar" class="confirm hidden">
+          <span id="confirm-text"></span>
+          <button class="primary" id="confirm-yes">Confirm</button>
+          <button id="confirm-no">Cancel</button>
         </div>
+
+        <ol class="log" id="heard" aria-live="polite"></ol>
       </div>
 
       <details class="help">
-        <summary>What you can say</summary>
-        <p>Start with the wake word (default "captain"), then one of: <b>land</b>, <b>return home</b>, <b>hold</b>, <b>pause mission</b>, <b>resume mission</b> — these run at once. <b>arm</b>, <b>disarm</b> and <b>takeoff</b> wait for you to say "confirm" (or press Confirm). Add "drone 2" to pick a drone; otherwise the target drone above is used. Custom phrases registered above are matched first.</p>
+        <summary>Conversational vocabulary</summary>
+        <p>
+          While a prompt is pending (e.g. "Say confirm to arm"), only these responses are
+          accepted: <b>confirm</b>, <b>execute</b>, <b>yes</b>, <b>affirmative</b>, <b>proceed</b>,
+          <b>go ahead</b> — accept; <b>cancel</b>, <b>no</b>, <b>abort</b>, <b>negative</b>,
+          <b>never mind</b> — reject; <b>hold</b>, <b>pause</b>, <b>stop</b>, <b>halt</b>, <b>wait</b>
+          — reject the pending action <em>and</em> issue that action instead. Anything else
+          during a pending prompt is ignored so an unrelated sentence can't accidentally
+          confirm a motor command.
+        </p>
       </details>
     </section>
-
 
 
     <!-- Joystick -->
@@ -308,22 +320,20 @@
       </div>
     </section>
 
+
     <!-- Register -->
     <section id="view-register" class="view hidden">
       <h1>Users</h1>
+      <p class="lede">Manage Captain accounts and biometrics. Only admin users can perform these actions.</p>
 
+      <!-- Users table card -->
       <div class="card">
-        <h2>Users &amp; biometric status</h2>
-        <p class="muted small">
-          Accounts registered on the Captain server, with their biometric enrolment
-          status. Click <b>Update</b> on a row to manage that user's biometrics, or
-          <b>Create account</b> below the table to add a new user.
-        </p>
-        <div class="row">
-          <button type="button" id="reg-fetch-users">Fetch users from Captain</button>
-          <span class="muted" id="reg-fetch-state"></span>
+        <div class="row" style="justify-content: space-between; align-items: baseline;">
+          <h2>Accounts</h2>
+          <button type="button" id="reg-fetch-users">⟳ Fetch users from Captain</button>
         </div>
-        <div class="tbl-wrap" style="margin-top: 12px;">
+        <p class="muted small" id="reg-fetch-state"></p>
+        <div class="tbl-wrap">
           <table class="tbl">
             <thead>
               <tr>
@@ -336,7 +346,7 @@
             </thead>
             <tbody id="reg-users-tbody">
               <tr><td colspan="5" class="muted" style="text-align: center; padding: 16px;">
-                Click "Fetch users from Captain" to load.
+                Loading…
               </td></tr>
             </tbody>
           </table>
@@ -346,56 +356,104 @@
         </div>
       </div>
 
-      <!-- Hidden editor — shown when "Create account" or a row's "Update" is pressed -->
-      <div id="reg-editor" class="hidden">
+      <!-- Editor panel — shown when Create or Update is pressed -->
+      <div id="reg-editor" class="card hidden">
         <div class="row" style="justify-content: space-between; align-items: baseline;">
-          <h1 id="reg-editor-title">Create new account</h1>
-          <button type="button" id="reg-editor-close" class="quiet">Cancel</button>
-        </div>
-        <p class="lede" id="reg-editor-lede">
-          Create the Captain account, then enrol the person's face and voice. Only embeddings are stored — never photos or recordings.
-        </p>
-
-        <div class="card step">
-          <h2><span class="n">1</span>Account</h2>
-          <form id="reg-form" class="grid" autocomplete="off">
-            <label>Username <span class="row tight">
-              <input id="r-user" required>
-              <button type="button" id="r-dictate" class="quiet" title="Say the username">Dictate</button>
-            </span></label>
-            <label>Password <input id="r-pass" type="password" autocomplete="new-password"></label>
-            <label>Role <select id="r-role">
-              <option>operator</option><option>supervisor</option>
-              <option>commander</option><option>admin</option>
-            </select></label>
-            <div class="row end"><button class="primary" id="r-save">Save account</button></div>
-          </form>
-          <p class="err" id="r-err" role="alert"></p>
+          <h2 id="reg-editor-title">—</h2>
+          <button type="button" id="reg-editor-close" class="quiet">Close</button>
         </div>
 
-        <div class="cols">
-          <div class="card step">
-            <h2><span class="n">2</span>Face</h2>
-            <p class="muted" id="r-face-note"></p>
-            <video id="r-video" class="preview" autoplay muted playsinline></video>
-            <div class="row"><button id="r-face-go" disabled>Capture face samples</button><span class="muted" id="r-face-prog"></span></div>
+        <!-- Create form -->
+        <form id="reg-create-form" class="stack hidden">
+          <div class="grid">
+            <label>Username <input id="r-user" required autocomplete="off"></label>
+            <label>Password <input id="r-pass" type="password" required autocomplete="new-password"></label>
+            <label>Role
+              <select id="r-role">
+                <option>operator</option>
+                <option>supervisor</option>
+                <option>commander</option>
+                <option>admin</option>
+              </select>
+            </label>
           </div>
-          <div class="card step">
-            <h2><span class="n">3</span>Voice</h2>
-            <p class="muted" id="r-voice-note"></p>
-            <div class="prompt" id="r-voice-prompt">—</div>
-            <div class="row"><button id="r-voice-go" disabled>Record voice samples</button><span class="muted" id="r-voice-prog"></span></div>
+          <p class="err" id="reg-create-err" role="alert"></p>
+          <div class="row">
+            <button type="submit" class="primary">Create account</button>
+            <span class="muted small">Face and voice can be enrolled after creation.</span>
           </div>
-        </div>
+        </form>
 
-        <div class="card">
-          <h2>Enrolled for <span id="r-who">—</span></h2>
-          <p class="muted small">Removing a template stops that person from using that factor to unlock voice control.</p>
-          <div class="row"><button id="r-rev-face" class="quiet" disabled>Remove face</button><button id="r-rev-voice" class="quiet" disabled>Remove voice</button></div>
+        <!-- Edit panel -->
+        <div id="reg-edit-section" class="hidden">
+          <p class="muted">Editing <strong id="reg-edit-username">—</strong></p>
+
+          <div class="cols">
+            <div class="card">
+              <h3>Password</h3>
+              <p class="muted small">Leave blank to keep the current password. Changing your own password will log you out everywhere.</p>
+              <label>New password <input id="r-edit-pass" type="password" autocomplete="new-password" placeholder="(unchanged)"></label>
+              <div class="row" style="margin-top: 8px;">
+                <button class="primary" id="r-edit-pass-save">Save password</button>
+              </div>
+            </div>
+
+            <div class="card">
+              <h3>Role</h3>
+              <p class="muted small">Cannot demote the last active admin.</p>
+              <label>Role
+                <select id="r-edit-role">
+                  <option>operator</option>
+                  <option>supervisor</option>
+                  <option>commander</option>
+                  <option>admin</option>
+                </select>
+              </label>
+              <div class="row" style="margin-top: 8px;">
+                <button class="primary" id="r-edit-role-save">Save role</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="cols">
+            <div class="card">
+              <h3>Face <span id="r-face-badge" class="badge"></span></h3>
+              <p class="muted" id="r-face-note">Look straight at the camera, one person only.</p>
+              <div class="preview-wrap">
+              <video id="r-video" autoplay muted playsinline></video>
+              <svg class="face-guide" id="face-guide" viewBox="0 0 100 75" preserveAspectRatio="none" aria-hidden="true">
+                <ellipse cx="50" cy="33" rx="18" ry="26" />
+              </svg>
+              <div class="face-guide-hint" id="face-guide-hint">Align your face in the oval</div>
+            </div>
+              <div class="row">
+                <button id="r-face-go">Capture samples</button>
+                <span class="muted" id="r-face-prog"></span>
+              </div>
+              <div class="row"><button id="r-rev-face" class="quiet">Remove face</button></div>
+            </div>
+
+            <div class="card">
+              <h3>Voice <span id="r-voice-badge" class="badge"></span></h3>
+              <p class="muted" id="r-voice-note">Speak each prompt in a normal voice, close to the microphone.</p>
+              <div class="row">
+                <button id="r-voice-go">Record samples</button>
+                <span class="muted" id="r-voice-prog"></span>
+              </div>
+              <div class="row"><button id="r-rev-voice" class="quiet">Remove voice</button></div>
+            </div>
+          </div>
+
+          <div class="card" style="border-color: #a84b4b;">
+            <h3 style="color: #e87474;">Danger zone</h3>
+            <div class="row">
+              <button id="reg-delete" class="danger">Delete user</button>
+              <span class="muted small" id="reg-delete-note"></span>
+            </div>
+          </div>
         </div>
       </div>
     </section>
-        
 
 
   </main>

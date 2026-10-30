@@ -88,7 +88,8 @@ function wavBytes(float32, rate) {
 }
 
 // Record `seconds` of mono 16 kHz 16-bit WAV (what the voice engine expects). Returns base64.
-export async function recordWav(seconds, deviceId) {
+export async function recordWav(seconds, deviceId, options = {}) {
+  const { signal, onProgress } = options;
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: { deviceId: deviceId ? { exact: deviceId } : undefined, channelCount: 1,
              echoCancellation: false, noiseSuppression: false },
@@ -100,11 +101,38 @@ export async function recordWav(seconds, deviceId) {
     const chunks = [];
     node.port.onmessage = (e) => chunks.push(e.data);
     const mute = ac.createGain();
-    mute.gain.value = 0;                       // keeps the node pulled by the graph, silent
+    mute.gain.value = 0;
     ac.createMediaStreamSource(stream).connect(node);
     node.connect(mute).connect(ac.destination);
-    await sleep(seconds * 1000);
-    const total = chunks.reduce((n, c) => n + c.length, 0), pcm = new Float32Array(total);
+
+    // Abortable wait with progress callbacks.
+    await new Promise((resolve) => {
+      const start = performance.now();
+      const total = seconds * 1000;
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        clearInterval(tick);
+        if (signal) signal.removeEventListener('abort', finish);
+        resolve();
+      };
+      if (signal) {
+        if (signal.aborted) return finish();
+        signal.addEventListener('abort', finish);
+      }
+      const tick = setInterval(() => {
+        const elapsed = performance.now() - start;
+        if (onProgress) onProgress(
+          Math.min(1, elapsed / total),
+          Math.max(0, (total - elapsed) / 1000),
+        );
+        if (elapsed >= total) finish();
+      }, 50);
+    });
+
+    const size = chunks.reduce((n, c) => n + c.length, 0);
+    const pcm = new Float32Array(size);
     let o = 0;
     for (const c of chunks) { pcm.set(c, o); o += c.length; }
     return bytesToB64(wavBytes(resample(pcm, ac.sampleRate, 16000), 16000));

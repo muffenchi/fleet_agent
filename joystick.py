@@ -191,6 +191,7 @@ class JoystickMapper:
     def __init__(self, *, settings, present, dispatch, emit, link=None) -> None:
         self._settings, self._present, self._dispatch, self._emit = settings, present, dispatch, emit
         self._link = link
+        self._on_voice_toggle = on_voice_toggle
         self._holds: dict[tuple[int, int], asyncio.Task] = {}
         self._last_fire: dict[tuple[int, int], float] = {}
         self._last_hat: dict[tuple[int, int], float] = {}
@@ -211,13 +212,23 @@ class JoystickMapper:
         cfg    = self._settings()
         action = cfg.get("bindings", {}).get(str(index))
 
-        # nav_toggle always works — it is the way out of nav mode
+        # nav_toggle — flips local nav mode
         if action == "nav_toggle":
             await self.set_nav_mode(not self._nav_mode)
             return
 
-        # UI pseudo-actions are only live while nav mode is ON.
-        # This is what makes button 11 a real "joystick controlling the map" gate.
+        # voice_lock_toggle — LOCAL action, does not go to Captain
+        if action == "voice_lock_toggle":
+            if self._on_voice_toggle is not None:
+                try:
+                    result = await self._on_voice_toggle()
+                    self._emit({"type": "voice.gate.toggle", **result})
+                except Exception as exc:
+                    self._emit({"type": "joystick.error",
+                                "action": action, "detail": str(exc)})
+            return
+
+        # UI pseudo-actions route via nav channel (only when nav mode is on)
         if action in PSEUDO_ACTIONS:
             if not self._nav_mode:
                 return
@@ -229,7 +240,7 @@ class JoystickMapper:
             self._emit({"type": "joystick.nav_fired", "action": action, "index": index})
             return
 
-        # Real drone commands (arm/land/rtl/…) — independent of nav mode.
+        # ACTIONS — real drone commands
         if not action or action not in ACTIONS or not self._present():
             return
         if time.monotonic() - self._last_fire.get(key, 0.0) < self.REPEAT_GUARD_S:

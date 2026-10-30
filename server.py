@@ -103,6 +103,7 @@ def _b64(data: Optional[str]) -> bytes:
         raise HTTPException(422, "sample is not valid base64") from None
 
 
+
 class Agent:
     def __init__(self, cfg: Config, guard: Guard, engines: dict, backend_factory: Callable) -> None:
         self.cfg, self.guard, self.engines, self._backend_factory = cfg, guard, engines, backend_factory
@@ -131,6 +132,7 @@ class Agent:
                                         dispatch=lambda action: self.execute(action, None, "joystick"),
                                         emit=self.hub.emit,
                                         link=self.link,
+                                        on_voice_toggle=self._toggle_voice_gate,
                                         )
         self.voice = VoiceController(
                                         self.gate,
@@ -170,6 +172,16 @@ class Agent:
             if self.gate.unlocked != last:
                 last = self.gate.unlocked
                 self.hub.emit({"type": "voice.gate", **self.gate.snapshot()})
+
+    async def _toggle_voice_gate(self) -> dict:
+        """Physical button (default: 10) toggles the voice gate. Called from
+        JoystickMapper — the return value is emitted as `voice.gate.toggle` so
+        the UI can show the reason. The gate's own `_gate_watch` loop will
+        also broadcast `voice.gate` on state change."""
+        result = self.gate.toggle(grace_s=90.0)
+        self.hub.emit({"type": "voice.gate", **self.gate.snapshot()})
+        return result
+
 
     async def _pad_stream(self) -> None:
         last = None
@@ -240,6 +252,18 @@ class Agent:
         }
     # )── Captain-backed operations ──────────────────────────────────────────
 
+    def _sync_engine_thresholds(self) -> None:
+        v = self.settings.get("verification", {})
+        face_eng = self.engines["face"]["engine"]
+        voice_eng = self.engines["voice"]["engine"]
+        if voice_eng is not None:
+            if "voice_threshold" in v:  voice_eng.threshold = v["voice_threshold"]
+            if "min_voice_audio_s" in v:
+                setattr(voice_eng, "min_audio_s", v["min_voice_audio_s"])
+        if face_eng is not None and "face_threshold" in v:
+            face_eng.threshold = v["face_threshold"]
+
+
     def _match_local_voice(self, text: str) -> Optional[dict]:
         if not self.link.user:
             return None
@@ -271,6 +295,7 @@ class Agent:
             self.saved_ts[scope] = entry.get("updated_ts_us")
         self.gate.ttl_s = self.settings["voice"]["unlock_ttl_s"]
         self.hub.emit({"type": "settings", "settings": self.settings, "saved_ts": self.saved_ts})
+        self._sync_engine_thresholds()
 
     async def refresh_drones(self) -> list[dict]:
         self.drones = await self.link.fleet_drones()
@@ -283,13 +308,14 @@ class Agent:
         cleaned = schema.clean(scope, value)
         new = {**self.settings[scope], **cleaned}
         if scope == "voice" and "unlock_factors" in cleaned:
-            await self._check_factor_change(set(self.settings["voice"]["unlock_factors"]),
-                                            set(cleaned["unlock_factors"]), password)
+            await self._check_factor_change(set(self.settings["voice"]["unlock_factors"]), set(cleaned["unlock_factors"]), password)
         res = await self.link.put_setting(scope, new)         # Captain first; apply only if it stuck
         self.settings[scope], self.saved_ts[scope] = new, res.get("updated_ts_us")
         if scope == "voice":
             self.gate.ttl_s = new["unlock_ttl_s"]
         self.hub.emit({"type": "settings", "settings": self.settings, "saved_ts": self.saved_ts})
+        if scope == "verification":
+            self._sync_engine_thresholds()
         return new
 
     async def _check_factor_change(self, old: set, new: set, password: Optional[str]) -> None:
@@ -358,8 +384,6 @@ class SettingBody(BaseModel):
 class TranscriptBody(BaseModel): 
     text: str; 
     final: bool = True
-class ConfirmBody(BaseModel):  
-    ok: bool
 class UnlockBody(BaseModel):
     password: Optional[str] = None
     voice_wav_b64: Optional[str] = None
@@ -392,8 +416,20 @@ class VoiceCommandBody(BaseModel):
     voice_wav_b64: Optional[str] = None
 class PreviewBody(BaseModel):
     data_b64: str
-def create_app(cfg: Config, *, engines: Optional[dict] = None,
-               backend_factory: Callable = PygameBackend, guard: Optional[Guard] = None):
+class ConfirmBody(BaseModel):
+    ok: bool
+    then_action: Optional[str] = None
+class VoiceAssignBody(BaseModel):
+    action:    str
+    phrase:    str
+    data_b64:  str
+    face_jpeg_b64: Optional[str] = None
+    dry_run:       bool = False
+class VoicePrecheckBody(BaseModel):
+    data_b64:      str
+    face_jpeg_b64: Optional[str] = None
+
+def create_app(cfg: Config, *, engines: Optional[dict] = None, backend_factory: Callable = PygameBackend, guard: Optional[Guard] = None):
     if engines is None:
         from .engines import load_engines
         engines = load_engines()
@@ -640,6 +676,129 @@ def create_app(cfg: Config, *, engines: Optional[dict] = None,
         return {"nav_mode": agent.mapper.nav_mode}
 
     # ── voice ──────────────────────────────────────────────────────────────
+    @app.post("/api/voice/assign")
+    @captain_errors
+    async def voice_assign(body: VoiceAssignBody):
+        need_login()
+        if body.action not in ACTIONS:
+            raise HTTPException(422, f"unknown action {body.action!r}")
+        phrase = body.phrase.strip()
+        if not phrase:
+            raise HTTPException(422, "phrase is required")
+        if len(phrase) > 60:
+            raise HTTPException(422, "phrase must be 60 characters or fewer")
+
+        stored = await agent.link.my_biometrics()
+        vcfg = agent.settings.get("verification", {})
+
+        face_ok = None
+        voice_ok = None
+        face_score = 0.0
+        voice_score = 0.0
+        voice_reason = ""
+
+        # ── Face first (cheapest signal, and independent of speech length) ──
+        if body.face_jpeg_b64 and stored.get("face"):
+            feng = agent.engines["face"]["engine"]
+            if feng is not None:
+                face_ok, face_score, _ = await run_in_threadpool(
+                    verify, feng, _b64(body.face_jpeg_b64), stored["face"],
+                    threshold=vcfg.get("face_threshold", feng.threshold),
+                )
+
+        # ── Voice, with the threshold lowered if face already passed ──────
+        if body.data_b64 and stored.get("voice"):
+            veng = agent.engines["voice"]["engine"]
+            if veng is not None:
+                thresh = (vcfg.get("voice_threshold_with_face", 0.45)
+                        if face_ok and vcfg.get("face_assist_voice_commands", True)
+                        else vcfg.get("voice_threshold", veng.threshold))
+                voice_ok, voice_score, voice_reason = await run_in_threadpool(
+                    verify, veng, _b64(body.data_b64), stored["voice"],
+                    threshold=thresh,
+                )
+
+        # ── Decision matrix ─────────────────────────────────────────────────
+        # 1) Strong voice match → accept, no face required
+        # 2) Face match + voice weak-but-present → accept (face carries identity)
+        # 3) Face match + voice sample too short to score → accept (short phrase)
+        # 4) Anything else → reject with the specific failure
+        face_carries_identity = face_ok and vcfg.get("face_assist_voice_commands", True)
+
+        if voice_ok:
+            pass                                            # case 1
+        elif face_carries_identity:
+            pass                                            # cases 2 / 3
+        else:
+            if face_ok is False and voice_ok is False:
+                raise HTTPException(422,
+                    f"neither face ({face_score:.3f}) nor voice ({voice_score:.3f}) matched")
+            if voice_ok is False:
+                raise HTTPException(422,
+                    f"voice does not match your enrolled voiceprint: {voice_reason} "
+                    f"(score {voice_score:.3f}, threshold {vcfg.get('voice_threshold', 0.75):.2f})")
+            if not stored.get("voice") and not stored.get("face"):
+                raise HTTPException(409,
+                    "no biometric template enrolled — ask a Captain admin to enrol face or voice first")
+            raise HTTPException(422, "verification failed — no usable sample")
+
+        try:
+            if body.dry_run:    
+                return {"ok": True, "score": voice_score if voice_ok else face_score, "match": voice_ok or face_ok}
+            entry = voice_commands.add_or_update( agent.link.user["username"], phrase, body.action, )
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+
+        agent.hub.emit({
+            "type": "voice.commands.changed",
+            "commands": voice_commands.list_user(agent.link.user["username"]),
+        })
+        return entry
+
+    @app.post("/api/voice/precheck")
+    @captain_errors
+    async def voice_precheck(body: VoicePrecheckBody):
+        """Verify a recording against the enrolled template WITHOUT saving it.
+        Used by the Voice tab to color the recorder indicator green/red
+        before Save is pressed. Same verify path as /api/voice/assign."""
+        need_login()
+        engine = agent.engines["voice"]["engine"]
+        if engine is None:
+            raise HTTPException(409, agent.engines["voice"]["reason"] or "voice engine unavailable")
+        stored = await agent.link.my_biometrics()
+        if not stored.get("voice"):
+            raise HTTPException(409, "no voiceprint enrolled for this account")
+
+        vcfg = agent.settings.get("verification", {})
+
+        # Optional face assist
+        face_ok, face_score = False, 0.0
+        if body.face_jpeg_b64 and stored.get("face"):
+            feng = agent.engines["face"]["engine"]
+            if feng is not None:
+                face_ok, face_score, _ = await run_in_threadpool(
+                    verify, feng, _b64(body.face_jpeg_b64), stored["face"],
+                    threshold=vcfg.get("face_threshold", feng.threshold),
+                )
+
+        # Voice with relaxed threshold if face passed
+        thresh = (vcfg.get("voice_threshold_with_face", 0.45)
+                if face_ok and vcfg.get("face_assist_voice_commands", True)
+                else vcfg.get("voice_threshold", engine.threshold))
+        voice_ok, voice_score, voice_msg = await run_in_threadpool(
+            verify, engine, _b64(body.data_b64), stored["voice"], threshold=thresh,
+        )
+
+        return {
+            "ok":            voice_ok or (face_ok and vcfg.get("face_assist_voice_commands", True)),
+            "voice_ok":      voice_ok,
+            "voice_score":   round(voice_score, 3),
+            "voice_message": voice_msg,
+            "face_ok":       face_ok,
+            "face_score":    round(face_score, 3),
+            "threshold":     round(thresh, 3),
+        }
+
 
     @app.post("/api/voice/transcript")
     @captain_errors
@@ -648,14 +807,6 @@ def create_app(cfg: Config, *, engines: Optional[dict] = None,
         res = await agent.voice.handle(body.text[:300], final=body.final)
         if res.status != "ignored" or body.final:
             agent.hub.emit({"type": "voice.heard", **res.as_dict()})
-        return res.as_dict()
-
-    @app.post("/api/voice/confirm")
-    @captain_errors
-    async def voice_confirm(body: ConfirmBody):
-        need_login()
-        res = await agent.voice.confirm(body.ok)
-        agent.hub.emit({"type": "voice.heard", **res.as_dict()})
         return res.as_dict()
 
     @app.post("/api/voice/lock")
@@ -700,7 +851,6 @@ def create_app(cfg: Config, *, engines: Optional[dict] = None,
         return {"unlocked": unlocked, "factors": results, "gate": agent.gate.snapshot()}
 
     # ── voice commands (local registry) ────────────────────────────────────
-
     @app.get("/api/voice/commands")
     async def list_voice_commands():
         need_login()
@@ -791,6 +941,14 @@ def create_app(cfg: Config, *, engines: Optional[dict] = None,
         })
         return entry
 
+    @app.post("/api/voice/confirm")
+    @captain_errors
+    async def voice_confirm(body: ConfirmBody):
+        need_login()
+        res = await agent.voice.confirm(body.ok, then_action=body.then_action)
+        agent.hub.emit({"type": "voice.heard", **res.as_dict()})
+        return res.as_dict()
+
     # ── register (admin) ───────────────────────────────────────────────────
 
     @app.get("/api/register/users")
@@ -798,7 +956,7 @@ def create_app(cfg: Config, *, engines: Optional[dict] = None,
     async def reg_users():
         need_admin()
         users = await agent.link.list_users_with_biometrics()
-        return [
+        mapped = [
             {
                 "id":         u.get("id"),
                 "username":   u["username"],
@@ -807,9 +965,10 @@ def create_app(cfg: Config, *, engines: Optional[dict] = None,
                 "biometrics": u.get("biometrics", {"voice": False, "face": False}),
             }
             for u in users
-           ]
-        log.info("GET /api/register/users -> %d user(s)  names=%s", len(mapped), [m["username"] for m in mapped][:5])        # ← at most 5 names, no biometric data
-        return mapped   
+        ]
+        log.info("GET /api/register/users -> %d user(s)  names=%s",
+                 len(mapped), [m["username"] for m in mapped][:5])
+        return mapped
 
     @app.post("/api/register/preview")
     @captain_errors

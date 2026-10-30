@@ -22,6 +22,7 @@ DEFAULTS: dict[str, dict[str, Any]] = {
             "3":  "focus_next",       # cycle to next drone
             "4":  "zoom_in",
             "5":  "zoom_out",
+            "10": "voice_lock_toggle",
             "11": "nav_toggle",       # enable/disable joystick navigation
         },
         "hat_bindings": {},
@@ -35,6 +36,14 @@ DEFAULTS: dict[str, dict[str, Any]] = {
             "unlock_factors": ["password"],
             "confirm_window_s": 8, },
     "camera": { "device_id": "" },
+    "verification": {
+        "face_threshold":              0.363,   # SFace default
+        "voice_threshold":             0.75,    # Resemblyzer default
+        "voice_threshold_with_face":   0.45,    # used when face matched
+        "min_voice_audio_s":           0.5,     # VAD floor
+        "face_assist_voice_commands":  True,    # face can substitute for voice
+        "continuous_face_check":       False,   # future: live camera during listening
+    },
 }
 
  
@@ -137,8 +146,17 @@ def _voice(raw: dict) -> dict:
 def _camera(raw: dict) -> dict:
     return {"device_id": _str(raw["device_id"], "device_id", 256)} if "device_id" in raw else {}
 
+def _verification(raw: dict) -> dict:
+    out: dict[str, Any] = {}
+    if "face_threshold" in              raw:        out["face_threshold"]               = _num(raw["face_threshold"]                , 0.2, 0.8  , "face_threshold")
+    if "voice_threshold" in             raw:        out["voice_threshold"]              = _num(raw["voice_threshold"]               , 0.4, 0.95 , "voice_threshold")
+    if "voice_threshold_with_face" in   raw:        out["voice_threshold_with_face"]    = _num(raw["voice_threshold_with_face"]     , 0.2, 0.9  , "voice_threshold_with_face")
+    if "min_voice_audio_s" in           raw:        out["min_voice_audio_s"]            = _num(raw["min_voice_audio_s"]             , 0.3, 3.0  , "min_voice_audio_s")
+    if "face_assist_voice_commands" in  raw:        out["face_assist_voice_commands"]   = _bool(raw["face_assist_voice_commands"]               , "face_assist_voice_commands")
+    if "continuous_face_check" in       raw:        out["continuous_face_check"]        = _bool(raw["continuous_face_check"]                    , "continuous_face_check")
+    return out
 
-_CLEANERS = {"joystick": _joystick, "voice": _voice, "camera": _camera}
+_CLEANERS = {"joystick": _joystick, "voice": _voice, "camera": _camera, "verification": _verification}
 SCOPES = tuple(_CLEANERS)
 
 
@@ -160,3 +178,6 @@ def merged(scope: str, stored: Any) -> dict:
     except SettingsError:
         pass
     return base
+
+
+

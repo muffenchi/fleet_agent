@@ -107,3 +107,33 @@ def match(username: str, text: str) -> Optional[dict]:
         if entry["normalized"] == norm:
             return entry
     return None
+
+def add_or_update(username: str, phrase: str, action: str) -> dict:
+    """One phrase per action. Re-uses the entry's id when replacing."""
+    data = _load()
+    norm = normalize(phrase)
+    if not norm:
+        raise ValueError("phrase must contain at least one word")
+    lst = data["users"].setdefault(username, [])
+
+    for existing in lst:
+        if existing["normalized"] == norm and existing["action"] != action:
+            raise ValueError(f"phrase already registered for {existing['action']!r}")
+
+    for existing in lst:
+        if existing["action"] == action:
+            existing["phrase"]     = phrase.strip()
+            existing["normalized"] = norm
+            _save(data)
+            return existing
+
+    entry = {
+        "id": f"vc_{int(time.time() * 1000)}",
+        "phrase": phrase.strip(),
+        "normalized": norm,
+        "action": action,
+        "created_ts": int(time.time()),
+    }
+    lst.append(entry)
+    _save(data)
+    return entry

@@ -55,73 +55,51 @@
       </form>
     </section>
 
+
     <!-- Commands -->
-    <section id="view-commands" class="view hidden">
-      <div class="row" style="justify-content: space-between; align-items: baseline; margin-bottom: 8px;">
-        <h1>Commands</h1>
-        <button id="btn-refresh-captain" class="quiet" title="Re-fetch commands and settings from Captain">⟳ Refresh from Captain</button>
+   
+
+
+  <section id="view-commands" class="view hidden">
+    <div class="row" style="justify-content: space-between; align-items: baseline; margin-bottom: 8px;">
+      <h1>Commands</h1>
+      <button id="btn-refresh-captain" class="quiet" title="Re-fetch commands and settings from Captain">⟳ Refresh from Captain</button>
+    </div>
+    <p class="lede">
+      Every command Captain can respond to, with the input devices currently mapped to it.
+      Voice and joystick fire these directly; use Captain's right-click map menu for ad-hoc dispatch.
+    </p>
+
+    <div class="card">
+      <h2>Command catalog</h2>
+      <p class="muted small" style="margin-bottom: 12px;">
+        Bindings are updated live from the server. Adding a new command to
+        <code>voice_catalog.js</code> makes it appear here and in the Voice tab.
+      </p>
+      <div class="tbl-wrap">
+        <table class="tbl" id="commands-table">
+          <thead>
+            <tr>
+              <th>Command</th>
+              <th>ID</th>
+              <th>Joystick</th>
+              <th>Voice</th>
+              <th>Safety</th>
+            </tr>
+          </thead>
+          <tbody id="commands-tbody">
+            <tr><td colspan="5" class="muted" style="text-align: center; padding: 20px;">Loading…</td></tr>
+          </tbody>
+        </table>
       </div>
-      <p class="lede">Commands and their assigned voice triggers and joystick buttons, loaded from Captain's database (<code style="color: var(--accent);">agent_settings</code>). Click Execute to send directly to your target drone.</p>
+    </div>
 
-    
-
-      <!-- Assigned Commands Table -->
-      <div class="card">
-        <h2>Assigned Commands (Voice & Joystick)</h2>
-        <p class="muted small" style="margin-bottom: 12px;">These commands and assignments are queried directly from Captain on login and updated live.</p>
-        
-        <div class="tbl-wrap">
-          <table class="tbl" id="commands-table">
-            <thead>
-              <tr>
-                <th>Action</th>
-                <th>MAVLink ID</th>
-                <th>Joystick Button</th>
-                <th>Voice Command Trigger</th>
-                <th>Safety Mode</th>
-                <th style="text-align: right;">Execute</th>
-              </tr>
-            </thead>
-            <tbody id="commands-tbody">
-              <tr><td colspan="6" class="muted" style="text-align: center; padding: 20px;">Connecting to Captain to retrieve command assignments…</td></tr>
-            </tbody>
-          </table>
-        </div>
-
-        <div id="cmd-confirm-bar" class="confirm hidden" style="margin-top: 14px;">
-          <span id="cmd-confirm-text"></span>
-          <button class="primary" id="cmd-confirm-yes">Confirm</button>
-          <button id="cmd-confirm-no">Cancel</button>
-        </div>
-      </div>
-
-      <div class="cols">
-        <div class="card">
-          <h2>Custom MAVLink Command</h2>
-          <p class="muted small">Send any MAVLink COMMAND_LONG supported by Captain.</p>
-          <form id="cmd-custom-form" class="stack">
-            <div class="grid">
-              <label>Command ID <input id="cmd-custom-id" type="number" placeholder="e.g. 22" required></label>
-              <label>Label <input id="cmd-custom-label" placeholder="e.g. Custom Command"></label>
-              <label>Param 1 <input id="cmd-param-1" type="number" step="any" value="0"></label>
-              <label>Param 2 <input id="cmd-param-2" type="number" step="any" value="0"></label>
-              <label>Param 3 <input id="cmd-param-3" type="number" step="any" value="0"></label>
-              <label>Param 4 <input id="cmd-param-4" type="number" step="any" value="0"></label>
-              <label>Param 5 <input id="cmd-param-5" type="number" step="any" value="0"></label>
-              <label>Param 6 <input id="cmd-param-6" type="number" step="any" value="0"></label>
-              <label>Param 7 <input id="cmd-param-7" type="number" step="any" value="0"></label>
-            </div>
-            <div class="row"><button class="primary" id="btn-cmd-custom-send">Send Custom Command</button></div>
-          </form>
-        </div>
-
-        <div class="card">
-          <h2>Command Activity & Audit Log</h2>
-          <p class="muted small">Live log of commands dispatched through Captain.</p>
-          <ol class="log" id="cmd-log" aria-live="polite" style="max-height: 280px;"></ol>
-        </div>
-      </div>
-    </section>
+    <div class="card">
+      <h2>Command Activity</h2>
+      <p class="muted small">Live log of commands dispatched through Captain (from voice, joystick, or browser).</p>
+      <ol class="log" id="cmd-log" aria-live="polite" style="max-height: 280px;"></ol>
+    </div>
+  </section>
 
 
     <!-- Voice -->
@@ -161,10 +139,11 @@
             <thead>
               <tr>
                 <th>Command</th>
-                <th>Phrase</th>
-                <th>Route</th>
-                <th style="text-align: center;">Confirm</th>
-                <th style="text-align: right;">Actions</th>
+                <th>ID</th>
+                <th>Joystick</th>
+                <th>Voice</th>
+                <th>Safety</th>
+                <th style="text-align: right;">Execute</th>
               </tr>
             </thead>
             <tbody id="vc-tbody">
@@ -176,23 +155,20 @@
 
       <!-- Recorder — appears when Set / Edit is clicked -->
       <div id="vc-recorder" class="card hidden">
-        <h2 id="vc-recorder-title">Record phrase</h2>
-        <p class="muted small">
-          Say the phrase you want to use for <strong id="vc-target-action">—</strong>.
-          Recording lasts <span id="vc-seconds">3</span>&nbsp;s. Your voice is checked against
-          your enrolled voiceprint; a mismatch is rejected.
-        </p>
-        <div class="prompt" id="vc-recorder-text">—</div>
-        <div class="row">
-          <button class="primary" id="vc-record">Start recording</button>
-          <button type="button" class="quiet" id="vc-cancel">Cancel</button>
+        <div class="vc-recorder-bar">
+          <code class="vc-target" id="vc-target-action">—</code>
+          <button class="primary" id="vc-record">Start</button>
+          <input id="vc-phrase-input" type="text" class="vc-phrase-input"       placeholder="Phrase will appear after recording"       maxlength="60" readonly>
+          <span class="vc-indicator" id="vc-indicator" title="Not verified">●</span>
+          <button class="primary hidden" id="vc-save">Save</button>
+          <button type="button" class="quiet" id="vc-cancel" title="Cancel">✕</button>
+        </div>
+        <div class="vc-progress-wrap hidden" id="vc-progress-wrap">
+          <div class="vc-progress-bar"><i id="vc-progress-fill"></i></div>
+          <span class="muted small" id="vc-progress-label">4.0 s</span>
         </div>
         <p class="muted small" id="vc-record-state"></p>
-        <p class="err" id="vc-err"></p>
-        <div class="row hidden" id="vc-confirm-row">
-          <button class="primary" id="vc-save">Save phrase</button>
-          <button type="button" class="quiet" id="vc-rerecord">Re-record</button>
-        </div>
+        <p class="err" id="vc-err" role="alert"></p>
       </div>
 
       <!-- Listening + conversation -->
@@ -234,7 +210,6 @@
         </p>
       </details>
     </section>
-
 
     <!-- Joystick -->
     <section id="view-joystick" class="view hidden">
@@ -312,6 +287,33 @@
         <h2>Camera</h2>
         <label>Camera used for face checks <select id="s-cam"><option value="">System default</option></select></label>
         <div class="row"><button class="primary" id="s-save-cam">Save camera</button><span class="muted" id="s-cam-saved"></span></div>
+      </div>
+      <div class="card">
+        <h2>Verification thresholds</h2>
+        <p class="muted small">
+          Cosine similarity at or above these values is treated as a match.
+          Face assists voice: when the operator's face matches, a weaker voice
+          match is accepted — this is what allows short spoken phrases like
+          "arm" to register reliably.
+        </p>
+        <div class="grid">
+          <label>Face threshold
+            <input id="v-face" type="number" min="0.2" max="0.8" step="0.01">
+          </label>
+          <label>Voice threshold
+            <input id="v-voice" type="number" min="0.4" max="0.95" step="0.01">
+          </label>
+          <label>Voice threshold when face matches
+            <input id="v-voice-face" type="number" min="0.2" max="0.9" step="0.01">
+          </label>
+          <label>Minimum voice duration (s)
+            <input id="v-min-audio" type="number" min="0.3" max="3.0" step="0.1">
+          </label>
+        </div>
+        <label class="check"><input type="checkbox" id="v-face-assist"> Allow face to substitute for voice on short phrases</label>
+        <label class="check"><input type="checkbox" id="v-continuous"> Continuous face check while voice is listening (requires camera)</label>
+        <p class="err" id="v-err" role="alert"></p>
+        <div class="row"><button class="primary" id="v-save">Save verification settings</button></div>
       </div>
       <div class="card">
         <h2>Saved copies</h2>

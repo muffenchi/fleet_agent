@@ -27,6 +27,7 @@ from dataclasses import dataclass
 # them through CaptainLink.send_nav() instead of execute().
 PSEUDO_ACTIONS: frozenset[str] = frozenset({
     "nav_toggle",
+    "voice_lock_toggle", 
     "select_drone",
     "deselect_drone",
     "focus_next",

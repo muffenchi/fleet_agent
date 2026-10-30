@@ -80,6 +80,94 @@ details.help { color: var(--muted); max-width: 70ch; } details.help summary { cu
 #gate-card[data-open="true"] { border-color: #2c6b4b; }
 #gate-card[data-open="true"] h2::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--go); box-shadow: 0 0 8px #35d07f88; margin-right: 10px; }
 #gate-card[data-open="false"] h2::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--warn); margin-right: 10px; }
+/* vc-recorder one-line bar */
+.vc-recorder-bar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: nowrap;
+}
+.vc-recorder-bar .vc-target {
+  min-width: 80px; padding: 4px 8px;
+  font-family: var(--mono); color: var(--accent);
+  background: var(--bg); border: 1px solid var(--line); border-radius: 4px;
+}
+.vc-phrase-input {
+  flex: 1; min-width: 0;
+}
+.vc-indicator {
+  width: 16px; height: 16px; border-radius: 50%;
+  background: #3a4550; color: transparent;
+  font-size: 10px; display: inline-grid; place-items: center;
+  transition: background .15s, color .15s, box-shadow .15s;
+  flex: none;
+}
+.vc-indicator.busy { background: var(--warn); color: #07202e; animation: vc-pulse 1s infinite; }
+.vc-indicator.good { background: var(--go); color: #07202e; box-shadow: 0 0 8px #35d07f88; }
+.vc-indicator.bad  { background: var(--stop); color: #fff; box-shadow: 0 0 8px #ff625977; }
+@keyframes vc-pulse { 50% { opacity: .4; } }
+
+/* Progress bar shown only while recording */
+.vc-progress-wrap {
+  display: flex; align-items: center; gap: 10px; margin-top: 8px;
+}
+.vc-progress-bar {
+  flex: 1; height: 6px; background: var(--bg);
+  border-radius: 3px; overflow: hidden;
+}
+.vc-progress-bar i {
+  display: block; height: 100%; width: 0;
+  background: var(--warn);
+  transition: width .05s linear, background .2s;
+}
+.vc-progress-bar i.done { background: var(--go); }
+
+
+.cmd-group-row td {
+  padding: 14px 10px 6px;
+  border-bottom: 1px solid var(--line);
+}
+.cmd-group-label {
+  font-weight: 600;
+  color: var(--accent);
+  letter-spacing: 0.03em;
+  font-size: 12px;
+  text-transform: uppercase;
+}
+.cmd-group-row:hover td { background: transparent; }
+
+/* Scrollable tables + sticky headers — keeps the header row visible
+   while the operator scrolls through ~20 grouped commands. */
+#view-commands .tbl-wrap,
+#view-voice .tbl-wrap {
+  max-height: 420px;
+  overflow-y: auto;
+  overflow-x: auto;
+}
+#view-commands .tbl thead th,
+#view-voice .tbl thead th {
+  position: sticky;
+  top: 0;
+  background: var(--panel);
+  z-index: 2;
+  box-shadow: inset 0 -1px 0 var(--line);
+}
+
+/* Group header rows in both catalogs. */
+.cmd-group-row td {
+  padding: 14px 10px 6px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+.cmd-group-row:hover td { background: var(--panel); }
+.cmd-group-label {
+  font-weight: 600;
+  color: var(--accent);
+  letter-spacing: 0.03em;
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+/* Voice table specifics (if the voice tab table has the .vc-phrase class). */
+#vc-tbody .vc-phrase { font-style: italic; color: var(--accent); }
+
 
 
 .preview-wrap {

@@ -36,8 +36,22 @@ _VERBS: dict[str, tuple[str, ...]] = {
 }
 _PHRASE_TO_ACTION = {p: a for a, ps in _VERBS.items() for p in ps}
 _FILLER = {"please", "now", "the", "a", "motors"}
-_CONFIRM = {"confirm", "yes confirm", "confirmed", "execute", "affirmative", "do it"}
-_CANCEL = {"cancel", "abort", "negative", "no", "never mind"}
+# Tokens that confirm a pending prompt
+_CONFIRM = {"confirm", "yes confirm", "confirmed", "execute",
+            "affirmative", "do it", "proceed", "go ahead", "yes"}
+# Tokens that cancel a pending prompt
+_CANCEL  = {"cancel", "abort", "negative", "no", "never mind", "nevermind"}
+# Escape-hatch tokens: cancel pending AND fire the corresponding action
+_HOLD_LIKE = {
+    "hold":  "hold",    # → loiter
+    "hold position": "hold",
+    "stop":  "hold",
+    "halt":  "hold",
+    "wait":  "hold",
+    "stay":  "hold",
+    "pause": "pause",
+    "pause mission": "pause",
+}
 _DIGIT_WORDS = {"zero": "0", "oh": "0", "one": "1", "two": "2", "to": "2", "too": "2",
                 "three": "3", "four": "4", "for": "4", "five": "5", "six": "6",
                 "seven": "7", "eight": "8", "nine": "9"}
@@ -65,6 +79,7 @@ class VoiceGate:
         self.ttl_s = ttl_s
         self._until = 0.0
         self.unlocked_by: list[str] = []
+        self._last_unlock_at: float = 0.0     # when factors last verified
 
     @property
     def unlocked(self) -> bool:
@@ -76,6 +91,7 @@ class VoiceGate:
 
     def unlock(self, factors: list[str]) -> None:
         self._until = self._clock() + self.ttl_s
+        self._last_unlock_at = self._clock()
         self.unlocked_by = list(factors)
 
     def touch(self) -> None:
@@ -86,9 +102,31 @@ class VoiceGate:
         self._until = 0.0
         self.unlocked_by = []
 
+    def quick_reenable(self, grace_s: float = 90.0) -> bool:
+        """Re-enable without re-authenticating, if a real unlock happened recently."""
+        if self._last_unlock_at == 0.0:
+            return False
+        if self._clock() - self._last_unlock_at > grace_s:
+            return False
+        self._until = self._clock() + self.ttl_s
+        return True
+
+    def toggle(self, grace_s: float = 90.0) -> dict:
+        """Physical button toggle. Returns the new snapshot + reason."""
+        if self.unlocked:
+            self.lock()
+            return {**self.snapshot(), "changed": True, "reason": "locked by button"}
+        if self.quick_reenable(grace_s):
+            return {**self.snapshot(), "changed": True, "reason": "re-enabled by button"}
+        return {**self.snapshot(), "changed": False,
+                "reason": "locked — re-unlock via password / voice / face first"}
+
     def snapshot(self) -> dict:
         return {"unlocked": self.unlocked, "remaining_s": self.remaining_s,
-                "ttl_s": self.ttl_s, "unlocked_by": list(self.unlocked_by) if self.unlocked else []}
+                "ttl_s": self.ttl_s,
+                "unlocked_by": list(self.unlocked_by) if self.unlocked else []}
+
+
 
 
 def _parse_target(tokens: list[str]) -> tuple[Optional[str], list[str]]:
@@ -181,17 +219,35 @@ class VoiceController:
             return VoiceResult("ignored", text)
         norm = normalize(text)
 
+        # Pending-confirm window must expire cleanly
         if self._pending and self._clock() >= self._pending[3]:
             self._pending = None
             if norm in _CONFIRM:
                 return VoiceResult("expired", text,
-                                   detail="confirmation window passed — say the command again")
-        if self._pending and norm in _CONFIRM:
-            return await self.confirm(True, text)
-        if self._pending and norm in _CANCEL:
-            return await self.confirm(False, text)
+                                detail="confirmation window passed — say the command again")
 
-        # ── Custom (locally registered) voice commands take priority ──
+        # ── Conversational responses take priority over normal grammar ──
+        if self._pending:
+            if norm in _CONFIRM:
+                return await self.confirm(True, text)
+            if norm in _CANCEL:
+                return await self.confirm(False, text)
+            if norm in _HOLD_LIKE:
+                # Reject the pending action AND fire the escape-hatch action.
+                self._pending = None
+                action = _HOLD_LIKE[norm]
+                drone = self._resolve_drone(None)
+                if isinstance(drone, VoiceResult):
+                    drone.text = text; drone.action = action
+                    return drone
+                return await self._run(action, drone, text)
+            # Any other utterance during a pending prompt is ignored — do NOT let
+            # random speech confirm a motor command.
+            return VoiceResult("ignored", text,
+                            detail=f"waiting for confirm / cancel / hold "
+                                    f"({int(self._pending[3] - self._clock())} s left)")
+
+        # ── No pending prompt: existing custom → grammar flow unchanged ──
         tokens = norm.split()
         wake_ok, tokens_after_wake = self._wake_ok(tokens)
         if wake_ok:
@@ -201,21 +257,17 @@ class VoiceController:
                 action, drone_from_phrase, phrase = custom
                 if not self.gate.unlocked:
                     return VoiceResult("locked", text, action, drone_from_phrase,
-                                       "voice control is locked — unlock it first")
+                                    "voice control is locked — unlock it first")
                 drone = drone_from_phrase or self._resolve_drone(None)
                 if isinstance(drone, VoiceResult):
-                    drone.text = text
-                    drone.action = action
+                    drone.text = text; drone.action = action
                     return drone
-                self._pending = None
                 if ACTIONS[action].confirm:
                     window = int(self._settings().get("confirm_window_s", 8))
                     self._pending = (action, drone, text, self._clock() + window)
-                    return VoiceResult(
-                        "needs_confirm", text, action, drone,
-                        f"say 'confirm' within {window} s to "
-                        f"{ACTIONS[action].label.lower()} drone {drone}",
-                    )
+                    return VoiceResult("needs_confirm", text, action, drone,
+                                    f"say 'confirm' within {window} s to "
+                                    f"{ACTIONS[action].label.lower()} drone {drone}")
                 return await self._run(action, drone, text)
 
         # ── Built-in grammar (unchanged) ──
@@ -249,16 +301,21 @@ class VoiceController:
             return VoiceResult("rejected", "", drone_id=spoken, detail=f"unknown drone {spoken!r}")
         return by_lower.get(spoken.lower(), spoken)
 
-    async def confirm(self, ok: bool, text: str = "") -> VoiceResult:
+    async def confirm(self, ok: bool, text: str = "", then_action: Optional[str] = None) -> VoiceResult:
         pend, self._pending = self._pending, None
         if pend is None or self._clock() >= pend[3]:
             return VoiceResult("expired", text, detail="nothing waiting for confirmation")
         action, drone, original, _ = pend
         if not ok:
+            if then_action in ACTIONS:
+                if not self.gate.unlocked:
+                    return VoiceResult("locked", text or original, then_action, drone, "voice control locked while waiting")
+                return await self._run(then_action, drone, text or original)
             return VoiceResult("cancelled", text or original, action, drone, "cancelled")
         if not self.gate.unlocked:
             return VoiceResult("locked", text or original, action, drone, "voice control locked while waiting")
         return await self._run(action, drone, text or original)
+
 
     async def _run(self, action: str, drone: str, text: str) -> VoiceResult:
         try:

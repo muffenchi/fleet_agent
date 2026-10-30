@@ -55,8 +55,7 @@ def best_score(probe: list[float], template: list[list[float]]) -> float:
     return max(cosine(p, t) for t in template)
 
 
-def verify(embedder: Embedder, data: bytes, stored: dict | None) -> tuple[bool, float, str]:
-    """(matched, score, message) for one probe against a template from Captain."""
+def verify(embedder, data, stored, threshold=None):
     if not stored or not stored.get("template"):
         return False, 0.0, f"no {embedder.kind} template is enrolled for this user"
     if stored.get("model") != embedder.model_id:
@@ -66,8 +65,9 @@ def verify(embedder: Embedder, data: bytes, stored: dict | None) -> tuple[bool, 
         score = best_score(embedder.embed(data), stored["template"])
     except BiometricError as exc:
         return False, 0.0, str(exc)
-    ok = score >= embedder.threshold
-    return ok, score, "match" if ok else "does not match the enrolled user"
+    limit = threshold if threshold is not None else embedder.threshold
+    ok = score >= limit
+    return ok, score, "match" if ok else f"does not match (needs ≥ {limit:.3f})"
 
 
 @dataclass

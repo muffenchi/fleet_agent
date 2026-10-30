@@ -228,6 +228,24 @@ async def test_no_hardware_no_commands_and_dispatch_errors_are_contained():
     await m2.on_edge(1, 0, True)
     assert any(e["type"] == "joystick.error" and e["detail"] == "no target" for e in ev)
 
+@pytest.mark.asyncio
+async def test_voice_lock_toggle_calls_callback_and_emits_result():
+    events = []
+    async def toggle_voice():
+        return {"unlocked": True, "reason": "button"}
+
+    mapper = JoystickMapper(
+        settings=lambda: {"bindings": {"10": "voice_lock_toggle"}},
+        present=lambda: True,
+        dispatch=lambda action: None,
+        emit=events.append,
+        on_voice_toggle=toggle_voice,
+    )
+
+    await mapper.on_edge(1, 10, True)
+
+    assert {"type": "voice.gate.toggle", "unlocked": True, "reason": "button"} in events
+
 class FakePads:
     def __init__(self): self.pads = []
     def poll(self): return [PadState(p.id, p.name, list(p.axes), list(p.buttons)) for p in self.pads]

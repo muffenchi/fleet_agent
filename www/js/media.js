@@ -87,6 +87,50 @@ function wavBytes(float32, rate) {
   return new Uint8Array(buf);
 }
 
+
+// Live microphone level meter for the voice activity bar.
+// Uses a separate AudioContext on the same microphone. Chrome/Edge
+// allow concurrent getUserMedia calls; if the STT engine holds the
+// mic exclusively (rare), the caller silently skips the meter.
+export async function createMicMeter(deviceId) {
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: {
+      deviceId: deviceId ? { exact: deviceId } : undefined,
+      channelCount: 1,
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false,
+    },
+  });
+  const ac = new AudioContext();
+  const source = ac.createMediaStreamSource(stream);
+  const analyser = ac.createAnalyser();
+  analyser.fftSize = 512;
+  source.connect(analyser);
+  // Deliberately NOT connected to ac.destination — we read only.
+  const buf = new Float32Array(analyser.fftSize);
+
+  return {
+    getRMS() {
+      analyser.getFloatTimeDomainData(buf);
+      let sum = 0;
+      for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+      return Math.sqrt(sum / buf.length);
+    },
+    stop() {
+      try { source.disconnect(); } catch {}
+      try { analyser.disconnect(); } catch {}
+      try { stream.getTracks().forEach((t) => t.stop()); } catch {}
+      try { ac.close(); } catch {}
+    },
+  };
+}
+
+
+
+
+
+
 // Record `seconds` of mono 16 kHz 16-bit WAV (what the voice engine expects). Returns base64.
 export async function recordWav(seconds, deviceId, options = {}) {
   const { signal, onProgress } = options;

@@ -188,7 +188,8 @@ class JoystickMapper:
     AXIS_THROTTLE_S    = 1.0 / 15.0          # ~15 Hz axis streaming
     AXIS_DEADBAND      = 0.15
 
-    def __init__(self, *, settings, present, dispatch, emit, link=None) -> None:
+    def __init__(self, *, settings, present, dispatch, emit, link=None,
+                 on_voice_toggle: Optional[Callable[[], Awaitable[dict]]] = None) -> None:
         self._settings, self._present, self._dispatch, self._emit = settings, present, dispatch, emit
         self._link = link
         self._on_voice_toggle = on_voice_toggle
@@ -340,4 +341,3 @@ class JoystickMapper:
             await self._dispatch(action)
         except Exception as exc:
             self._emit({"type": "joystick.error", "action": action, "detail": str(exc)})
-

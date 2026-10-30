@@ -21,8 +21,15 @@
     <i class="lamp"></i><span id="link-text">Not connected</span>
   </div>
    <label class="target hidden" id="target-wrap">Target drone
-  <select id="target"><option value="">none selected</option></select>
-</label>
+      <select id="target"><option value="">none selected</option></select>
+   </label>
+  <div id="voice-activity" class="voice-activity hidden" title="Voice command pipeline">
+      <span class="va-mic">🎤</span>
+      <div class="va-bar"><i id="va-fill"></i></div>
+      <span class="va-heard"  id="va-heard">—</span>
+      <span class="va-match"  id="va-match"></span>
+      <span class="va-result" id="va-result">·</span>
+  </div>
   <div class="grow"></div>
   <span id="who"></span>
   <button id="logout" class="quiet hidden">Log out</button>
@@ -57,50 +64,46 @@
 
 
     <!-- Commands -->
-   
-
-
-  <section id="view-commands" class="view hidden">
-    <div class="row" style="justify-content: space-between; align-items: baseline; margin-bottom: 8px;">
-      <h1>Commands</h1>
-      <button id="btn-refresh-captain" class="quiet" title="Re-fetch commands and settings from Captain">⟳ Refresh from Captain</button>
-    </div>
-    <p class="lede">
-      Every command Captain can respond to, with the input devices currently mapped to it.
-      Voice and joystick fire these directly; use Captain's right-click map menu for ad-hoc dispatch.
-    </p>
-
-    <div class="card">
-      <h2>Command catalog</h2>
-      <p class="muted small" style="margin-bottom: 12px;">
-        Bindings are updated live from the server. Adding a new command to
-        <code>voice_catalog.js</code> makes it appear here and in the Voice tab.
-      </p>
-      <div class="tbl-wrap">
-        <table class="tbl" id="commands-table">
-          <thead>
-            <tr>
-              <th>Command</th>
-              <th>ID</th>
-              <th>Joystick</th>
-              <th>Voice</th>
-              <th>Safety</th>
-            </tr>
-          </thead>
-          <tbody id="commands-tbody">
-            <tr><td colspan="5" class="muted" style="text-align: center; padding: 20px;">Loading…</td></tr>
-          </tbody>
-        </table>
+    <section id="view-commands" class="view hidden">
+      <div class="row" style="justify-content: space-between; align-items: baseline; margin-bottom: 8px;">
+        <h1>Commands</h1>
+        <button id="btn-refresh-captain" class="quiet" title="Re-fetch commands and settings from Captain">⟳ Refresh from Captain</button>
       </div>
-    </div>
+      <p class="lede">
+        Every command Captain can respond to, with the input devices currently mapped to it.
+        Voice and joystick fire these directly; use Captain's right-click map menu for ad-hoc dispatch.
+      </p>
 
-    <div class="card">
-      <h2>Command Activity</h2>
-      <p class="muted small">Live log of commands dispatched through Captain (from voice, joystick, or browser).</p>
-      <ol class="log" id="cmd-log" aria-live="polite" style="max-height: 280px;"></ol>
-    </div>
-  </section>
+      <div class="card">
+        <h2>Command catalog</h2>
+        <p class="muted small" style="margin-bottom: 12px;">
+          Bindings are updated live from the server. Adding a new command to
+          <code>voice_catalog.js</code> makes it appear here and in the Voice tab.
+        </p>
+        <div class="tbl-wrap">
+          <table class="tbl" id="commands-table">
+            <thead>
+              <tr>
+                <th>Command</th>
+                <th>ID</th>
+                <th>Joystick</th>
+                <th>Voice</th>
+                <th>Safety</th>
+              </tr>
+            </thead>
+            <tbody id="commands-tbody">
+              <tr><td colspan="5" class="muted" style="text-align: center; padding: 20px;">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
 
+      <div class="card">
+        <h2>Command Activity</h2>
+        <p class="muted small">Live log of commands dispatched through Captain (from voice, joystick, or browser).</p>
+        <ol class="log" id="cmd-log" aria-live="polite" style="max-height: 280px;"></ol>
+      </div>
+    </section>
 
     <!-- Voice -->
     <section id="view-voice" class="view hidden">

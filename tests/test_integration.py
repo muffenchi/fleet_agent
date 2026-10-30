@@ -176,7 +176,8 @@ async def test_captain_rejection_is_reported_and_flashes_red(rig):
     f = events(rig, "COMMAND_SENT")[-1]["fields"]; assert f["ok"] is False and f["source"] == "agent"
     await close_agent(a)
 
-async def test_voice_gate_wake_word_confirm_and_tts_source(rig):
+async def test_voice_gate_wake_word_confirm_and_tts_source(rig, caplog):
+    caplog.set_level("INFO")
     a = await make_agent(); await login(a, rig)
     await a.http.post("/api/target", json={"drone_id": "2"})
     say = lambda t: a.http.post("/api/voice/transcript", json={"text": t, "final": True})
@@ -189,6 +190,10 @@ async def test_voice_gate_wake_word_confirm_and_tts_source(rig):
     assert (await say("land")).json()["status"] == "ignored"                 # no wake word
     res = (await say("Captain, land drone two")).json()
     assert res["status"] == "executed" and res["drone_id"] == "2"
+    assert "voice transcript received (final=True): 'Captain, land drone two'" in caplog.text
+    assert "voice transcript result: status=executed" in caplog.text
+    assert "sending command to Captain via POST /command: Land (2) source=voice" in caplog.text
+    assert "Captain accepted command via POST /command: Land (2) source=voice" in caplog.text
     await until(lambda: events(rig, "COMMAND_SENT"))
     assert events(rig, "COMMAND_SENT")[-1]["fields"]["source"] == "voice"    # → tts-status flickers in app.js
     res = (await say("captain takeoff")).json(); assert res["status"] == "needs_confirm"

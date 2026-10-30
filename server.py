@@ -356,13 +356,19 @@ class Agent:
         if not drone:
             raise DispatchError("No target drone selected")
         cmd = build_action(action, drone, source_hint=source)          # takeoff_alt fixed 25
+        log.info("sending command to Captain via POST /command: %s source=%s",
+                 cmd["label"], source)
         try:
             res = await self.link.send_command(cmd)
         except CaptainError as exc:
+            log.warning("Captain POST /command failed: %s source=%s detail=%r",
+                        cmd["label"], source, exc.detail)
             self.hub.emit({"type": "command.result", "ok": False, "label": cmd["label"],
                            "source": source, "detail": exc.detail})
             raise DispatchError(exc.detail) from None
         detail = f"{cmd['label']} accepted by Captain"
+        log.info("Captain accepted command via POST /command: %s source=%s",
+                 cmd["label"], source)
         self.hub.emit({"type": "command.result", "ok": True, "label": cmd["label"],
                        "source": source, "detail": detail})
         return {"detail": detail, "result": res.get("result")}
@@ -804,7 +810,11 @@ def create_app(cfg: Config, *, engines: Optional[dict] = None, backend_factory: 
     @captain_errors
     async def transcript(body: TranscriptBody):
         need_login()
-        res = await agent.voice.handle(body.text[:300], final=body.final)
+        text = body.text[:300]
+        log.info("voice transcript received (final=%s): %r", body.final, text)
+        res = await agent.voice.handle(text, final=body.final)
+        log.info("voice transcript result: status=%s action=%s drone_id=%s detail=%r",
+                 res.status, res.action or "-", res.drone_id or "-", res.detail)
         if res.status != "ignored" or body.final:
             agent.hub.emit({"type": "voice.heard", **res.as_dict()})
         return res.as_dict()
@@ -1132,4 +1142,3 @@ if __name__ == "__main__":
     if cfg.open_browser:
         threading.Timer(1.0, webbrowser.open, args=(url,)).start()
     uvicorn.run(app, host="127.0.0.1", port=cfg.port, log_level="warning")
-

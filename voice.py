@@ -201,6 +201,8 @@ class VoiceController:
             log.exception("custom voice command lookup failed")
             return None
         if entry:
+            log.info("voice phrase matched registry entry action=%s phrase=%r",
+                     entry["action"], entry["phrase"])
             return (entry["action"], None, entry["phrase"])
 
         # Try stripping a trailing "drone N" so "arm the drone 2" matches phrase "arm the drone"
@@ -216,7 +218,10 @@ class VoiceController:
                     log.exception("custom voice command lookup failed after drone suffix removal")
                     entry = None
                 if entry:
+                    log.info("voice phrase matched registry entry (drone suffix stripped) "
+                             "action=%s phrase=%r drone=%s", entry["action"], entry["phrase"], drone)
                     return (entry["action"], drone, entry["phrase"])
+        log.info("voice phrase did not match any registered custom command text=%r", text)
         return None
 
     async def handle(self, text: str, *, final: bool = True) -> VoiceResult:
@@ -257,7 +262,9 @@ class VoiceController:
         # ── No pending prompt: existing custom → grammar flow unchanged ──
         tokens = norm.split()
         wake_ok, tokens_after_wake = self._wake_ok(tokens)
-        if wake_ok:
+        if not wake_ok:
+            log.info("voice transcript missing wake word text=%r", norm)
+        else:
             text_after_wake = " ".join(tokens_after_wake)
             custom = self._match_custom(text_after_wake)
             if custom:
@@ -284,10 +291,16 @@ class VoiceController:
 
         # ── Built-in grammar (unchanged) ──
         action, spoken, wake_ok2 = self._parse(text)
+        if action is not None:
+            log.info("voice phrase matched built-in grammar action=%s drone=%r", action, spoken)
         if action is None or not wake_ok2:
-            log.info("voice transcript ignored reason=%s",
-                     "missing_wake_word" if not wake_ok2 else "no_command_match")
-            return VoiceResult("ignored", text)
+            reason = "missing_wake_word" if not wake_ok2 else "no_command_match"
+            log.info("voice transcript ignored reason=%s text=%r", reason, norm)
+            detail = ("no command match — nothing in your voice command registry or the "
+                      "built-in phrases matches this sentence"
+                      if reason == "no_command_match" else
+                      f'say the wake word first (e.g. "{self._settings().get("wake_word", "captain")} <command>")')
+            return VoiceResult("ignored", text, detail=detail)
         if not self.gate.unlocked:
             log.info("voice command locked action=%s source=builtin", action)
             return VoiceResult("locked", text, action, spoken, "voice control is locked — unlock it first")

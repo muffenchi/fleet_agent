@@ -1,5 +1,5 @@
 // Browser speech recognition (Chrome, Edge, Safari). In Chrome and Edge the audio is sent to
-// the browser vendor's cloud service, so it needs internet — plan another engine for field use.
+// the browser vendor's cloud service, so it needs internet — stt/local.js is the offline backup.
 import { registerEngine } from './registry.js';
 
 const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -28,11 +28,33 @@ registerEngine('webspeech', {
         else onError(`Speech recognition error: ${e.error}`);
       };
       // The service ends the session after silence; restart while the operator still wants to listen.
-      rec.onend = () => { if (wanted) { try { open(); rec.start(); } catch (_) { onState('stopped'); } } else onState('stopped'); };
+      // Reliability fix: back off between restarts and give up after a few consecutive
+      // failures. The old tight restart loop hammered the cloud service every time it
+      // refused, which is what surfaced as "speech engine offline after a couple of tries".
+      rec.onend = () => {
+        if (!wanted) { onState('stopped'); return; }
+        if (restarts >= MAX_RESTARTS) {
+          wanted = false;
+          onError('Browser speech engine keeps stopping (it needs internet). '
+                + 'Switch to the local offline STT engine.');
+          onState('stopped');
+          return;
+        }
+        restarts++;
+        clearTimeout(restartTimer);
+        restartTimer = setTimeout(() => {
+          if (!wanted) return;
+          try { open(); rec.start(); } catch (_) { onState('stopped'); }
+        }, Math.min(800 * restarts, 4000));
+      };
     };
+    let restarts = 0, restartTimer = null;
+    rec_onstart_ok = () => { restarts = 0; };   // a healthy session resets the counter
     return {
-      start() { wanted = true; open(); rec.start(); },
-      stop() { wanted = false; if (rec) rec.stop(); },
+      start() { wanted = true; restarts = 0; open(); rec.onstart = ((prev) => (...a) => {
+        restarts = 0; if (prev) prev.apply(rec, a);
+      })(rec.onstart); rec.start(); },
+      stop() { wanted = false; clearTimeout(restartTimer); if (rec) rec.stop(); },
     };
   },
 });

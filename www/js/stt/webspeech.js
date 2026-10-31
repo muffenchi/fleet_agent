@@ -4,6 +4,9 @@ import { registerEngine } from './registry.js';
 
 const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
 
+// Give up restarting after this many consecutive early session ends (see rec.onend below).
+const MAX_RESTARTS = 5;
+
 registerEngine('webspeech', {
   label: 'Browser speech recognition (needs internet)',
   available: () => !!Rec,
@@ -49,7 +52,6 @@ registerEngine('webspeech', {
       };
     };
     let restarts = 0, restartTimer = null;
-    rec_onstart_ok = () => { restarts = 0; };   // a healthy session resets the counter
     return {
       start() { wanted = true; restarts = 0; open(); rec.onstart = ((prev) => (...a) => {
         restarts = 0; if (prev) prev.apply(rec, a);

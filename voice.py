@@ -253,13 +253,25 @@ class VoiceController:
                     drone.text = text; drone.action = action
                     return drone
                 return await self._run(action, drone, text)
-            # Any other utterance during a pending prompt is ignored — do NOT let
-            # random speech confirm a motor command.
+            # Any other utterance during a pending prompt: it may be a *new* command,
+            # which replaces the pending one (and re-arms the confirm window if it is
+            # itself a motor action). Only speech that matches nothing is ignored —
+            # random chatter must never confirm a motor command.
+            new_r = await self._fresh(text)
+            if new_r.status != "ignored":
+                return new_r
             return VoiceResult("ignored", text,
                             detail=f"waiting for confirm / cancel / hold "
                                     f"({int(self._pending[3] - self._clock())} s left)")
 
-        # ── No pending prompt: existing custom → grammar flow unchanged ──
+        # ── No pending prompt: custom registry → built-in grammar ──
+        return await self._fresh(text)
+
+    async def _fresh(self, text: str) -> VoiceResult:
+        """Match an utterance that is NOT a confirm/cancel reply: first against the
+        operator's custom voice-command registry, then the built-in grammar. Used
+        both when idle and to let a *new* command replace a pending confirmation."""
+        norm = normalize(text)
         tokens = norm.split()
         wake_ok, tokens_after_wake = self._wake_ok(tokens)
         if not wake_ok:

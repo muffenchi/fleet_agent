@@ -1,6 +1,7 @@
 // Voice tab: unlock gate, per-command phrase assignment, live conversation.
 import { listEngines, createEngine } from './stt/registry.js';
 import './stt/webspeech.js';
+import './stt/local.js';
 import { recordWav, captureFace, createMicMeter } from './media.js';
 import { VOICE_CATALOG, GROUP_ORDER } from './voice_catalog.js';
 

@@ -50,6 +50,8 @@ LOG_FILE = Path(os.environ.get(
     "FLEET_AGENT_LOG_FILE", str(Path.home() / ".fleet_agent" / "fleet_agent.log")
 )).expanduser()
 
+TRACE_FILE = os.environ.get("FLEET_AGENT_TRACE_FILE", "")   # empty = traces stay in memory only
+
 
 def _configure_logging() -> None:
     root = logging.getLogger()
@@ -153,7 +155,7 @@ class Agent:
         self.gate = VoiceGate(self.settings["voice"]["unlock_ttl_s"])
         self.limiter = AttemptLimiter()
         self.enrollments = EnrollmentStore()
-        self.traces = TraceLog()
+        self.traces = TraceLog(file_path=TRACE_FILE or None)
         self.pending_trace: Optional[str] = None   # trace id of the sentence awaiting "confirm"
         self.monitor: Optional[JoystickMonitor] = None
         self.pad_watchers = 0
@@ -554,9 +556,9 @@ def create_app(cfg: Config, *, engines: Optional[dict] = None, backend_factory: 
 
         elapsed_ms = (time.monotonic() - started) * 1000
         if resp.status_code >= 500:
-              log.warning("%s %s -> %d (%.1f ms)", request.method, request.url.path, resp.status_code, elapsed_ms)
+            log.warning("%s %s -> %d (%.1f ms)", request.method, request.url.path, resp.status_code, elapsed_ms)
         else:
-            # log.info("%s %s -> %d (%.1f ms)", request.method, request.url.path, resp.status_code, elapsed_ms)
+            log.info("%s %s -> %d (%.1f ms)", request.method, request.url.path, resp.status_code, elapsed_ms)
         return resp
   
     def captain_errors(fn):

@@ -31,6 +31,18 @@ The console prints a link ending in `?k=<token>` and opens it. The token is per 
 address without it is refused (see Security). `--captain` can also come from `CAPITAN_URL` or an
 `agent.json` (the file Captain's `GET /agent/agent.json` produces) in the working directory or `~/.fleet_agent/`.
 
+### Logs
+
+The agent writes a rotating log to `~/.fleet_agent/fleet_agent.log` (on Windows,
+`%USERPROFILE%\.fleet_agent\fleet_agent.log`) as well as the console. Set
+`FLEET_AGENT_LOG_FILE` to use a different file path. The log includes speech
+engine status, recognized transcripts and voice-command results, voice settings
+changes, unlock outcomes, and requests to Captain. It does not record audio,
+passwords, or microphone device IDs. Spoken transcripts and custom voice-command
+phrases are included to help diagnose recognition and matching, so treat the log
+as private and review it before sharing. The log rotates at about 5 MB and keeps
+four backups.
+
 ## What the Captain header icons do (no new Captain UI code)
 
 | Icon | Behaviour | Where it comes from |

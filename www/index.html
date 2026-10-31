@@ -161,16 +161,15 @@
         <div class="vc-recorder-bar">
           <code class="vc-target" id="vc-target-action">—</code>
           <button class="primary" id="vc-record">Start</button>
-          <input id="vc-phrase-input" type="text" class="vc-phrase-input"       placeholder="Phrase will appear after recording"       maxlength="60" readonly>
+          <input id="vc-phrase-input" type="text" class="vc-phrase-input"                placeholder="Phrase will appear after recording"                maxlength="60" readonly>
+          <button class="quiet" id="vc-face-capture" title="Capture a face snapshot to enable face-assisted verification">            📷          </button>
           <span class="vc-indicator" id="vc-indicator" title="Not verified">●</span>
           <button class="primary hidden" id="vc-save">Save</button>
           <button type="button" class="quiet" id="vc-cancel" title="Cancel">✕</button>
         </div>
-        <div class="vc-progress-wrap hidden" id="vc-progress-wrap">
-          <div class="vc-progress-bar"><i id="vc-progress-fill"></i></div>
-          <span class="muted small" id="vc-progress-label">4.0 s</span>
-        </div>
+        <div class="vc-progress-wrap hidden" id="vc-progress-wrap">…</div>
         <p class="muted small" id="vc-record-state"></p>
+        <p class="muted small" id="vc-face-state"></p>
         <p class="err" id="vc-err" role="alert"></p>
       </div>
 

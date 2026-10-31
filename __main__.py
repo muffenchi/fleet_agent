@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import logging
 import threading
 import webbrowser
 
@@ -19,7 +18,6 @@ def main() -> None:
     ap.add_argument("--no-browser", action="store_true")
     args = ap.parse_args()
     cfg = Config.build(args.port, args.captain, not args.no_browser)
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     app, agent = create_app(cfg)
     url = agent.guard.launch_url()
     print(f"\nFleet Agent is running. Open this link (it carries this run's access token):\n\n    {url}\n")

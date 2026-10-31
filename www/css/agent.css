@@ -265,6 +265,14 @@ details.help { color: var(--muted); max-width: 70ch; } details.help summary { cu
 .voice-activity.flash-bad  { border-color: var(--stop); }
 .voice-activity.flash-bad  #va-fill { background: var(--stop); }
 
+#vc-face-capture {
+  padding: 4px 8px; font-size: 15px;
+}
+#vc-face-capture.has-face {
+  border-color: var(--go);
+  color: var(--go);
+}
+
 @media (max-width: 820px) {
   .voice-activity .va-bar    { width: 44px; }
   .voice-activity .va-heard  { min-width: 80px; }

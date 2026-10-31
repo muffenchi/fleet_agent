@@ -69,7 +69,7 @@ def drone_sys_id(drone_id: str) -> int:
     return int(m.group(1)) if m else 1
 
 
-def build_action(action: str, drone_id: str, *, takeoff_alt_m: float = 25,
+def build_action(action: str, drone_id: Optional[str], *, takeoff_alt_m: float = 25,
                  source_hint: str = "agent") -> dict:
     if action not in ACTIONS:
         raise KeyError(f"unknown action {action!r}")
@@ -79,14 +79,15 @@ def build_action(action: str, drone_id: str, *, takeoff_alt_m: float = 25,
     params = dict(spec.params)
     if spec.name == "takeoff":
         params["param7"] = float(takeoff_alt_m)
+    target = str(drone_id or "").strip()
     return {
         "type": "mavlink",
-        "droneId": str(drone_id),
-        "sys_id": drone_sys_id(drone_id),
+        "droneId": target,                       # "" → Captain decides
+        "sys_id":  drone_sys_id(target) if target else 0,
         "class": "COMMAND_LONG",
         "command": spec.command,
         "params": {**{f"param{i}": 0 for i in range(1, 8)}, **params},
-        "label": f"{spec.label} ({drone_id})",
+        "label": f"{spec.label} ({target or 'auto'})",
         "source": "agent",
         "source_hint": source_hint,
         "ts": int(time.time() * 1000),

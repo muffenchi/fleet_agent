@@ -10,16 +10,22 @@ import logging
 import asyncio
 import base64
 import binascii
+import os
 import sys
 import time
-
-
 from pathlib import Path
-from typing import Callable, Optional
+from logging.handlers import RotatingFileHandler
 
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     __package__ = "fleet_agent"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 1. imports — next to the other `from .x import y` lines at the top of server.py
+# ─────────────────────────────────────────────────────────────────────────────
+from .voice_trace import TRACE, TraceLog, new_trace
+
+from typing import Callable, Optional
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
@@ -40,8 +46,38 @@ from .voice         import VoiceController, VoiceGate, _VERBS
 WWW = Path(__file__).resolve().parent / "www"
 MAX_B64 = 6_000_000      # ~4.5 MB decoded; a 3 s WAV is ~100 KB, a JPEG frame ~150 KB
 
-logging.basicConfig(level=logging.INFO)
+LOG_FILE = Path(os.environ.get(
+    "FLEET_AGENT_LOG_FILE", str(Path.home() / ".fleet_agent" / "fleet_agent.log")
+)).expanduser()
+
+
+def _configure_logging() -> None:
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    if not any(isinstance(handler, RotatingFileHandler)
+               and Path(handler.baseFilename) == LOG_FILE.resolve()
+               for handler in root.handlers):
+        LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        file_handler = RotatingFileHandler(
+            LOG_FILE, maxBytes=5_000_000, backupCount=4, encoding="utf-8"
+        )
+        file_handler.setFormatter(logging.Formatter(
+            "%(asctime)s %(levelname)s %(name)s: %(message)s"
+        ))
+        root.addHandler(file_handler)
+    if not any(isinstance(handler, logging.StreamHandler)
+               and not isinstance(handler, logging.FileHandler)
+               for handler in root.handlers):
+        console_handler = logging.StreamHandler()
+        console_handler.setFormatter(logging.Formatter(
+            "%(asctime)s %(levelname)s %(name)s: %(message)s"
+        ))
+        root.addHandler(console_handler)
+
+
+_configure_logging()
 log = logging.getLogger(__name__)
+log.info("file logging enabled path=%s", LOG_FILE.resolve())
 
 
 class DispatchError(Exception):
@@ -94,6 +130,7 @@ class AttemptLimiter:
         self._fails, self._blocked_until = [], 0.0
 
 
+
 def _b64(data: Optional[str]) -> bytes:
     if not data or len(data) > MAX_B64:
         raise HTTPException(422, "sample missing or too large")
@@ -116,6 +153,8 @@ class Agent:
         self.gate = VoiceGate(self.settings["voice"]["unlock_ttl_s"])
         self.limiter = AttemptLimiter()
         self.enrollments = EnrollmentStore()
+        self.traces = TraceLog()
+        self.pending_trace: Optional[str] = None   # trace id of the sentence awaiting "confirm"
         self.monitor: Optional[JoystickMonitor] = None
         self.pad_watchers = 0
         self.link = CaptainLink(
@@ -316,6 +355,11 @@ class Agent:
         self.hub.emit({"type": "settings", "settings": self.settings, "saved_ts": self.saved_ts})
         if scope == "verification":
             self._sync_engine_thresholds()
+        if scope == "voice":
+            logged_settings = {key: val for key, val in new.items() if key != "microphone_id"}
+            log.info("voice settings saved settings=%s", logged_settings)
+        else:
+            log.info("settings saved scope=%s keys=%s", scope, sorted(cleaned))
         return new
 
     async def _check_factor_change(self, old: set, new: set, password: Optional[str]) -> None:
@@ -343,36 +387,69 @@ class Agent:
                     raise schema.SettingsError(f"no {kind} template is enrolled for {self.link.user['username']} — "
                                                "ask a Captain admin to enrol you first")
 
+# ── tracing ────────────────────────────────────────────────────────────
+
+    def _trace_begin(self, tid: str, text: str, engine: str, count: bool = True) -> None:
+        ev = self.traces.begin(tid, text, engine, count=count)
+        self.hub.emit({"type": "voice.trace", "trace": tid, "stage": "heard", **ev})
+
+    def _trace(self, tid: str, stage: str, **fields) -> None:
+        ev = self.traces.stage(tid, stage, **fields)
+        self.hub.emit({"type": "voice.trace", "trace": tid, "stage": stage, **ev})
+
     async def execute(self, action: str, drone_id: Optional[str], source: str) -> dict:
-        """Send a command to Captain. Raises DispatchError 
-        if the action cannot be executed (not logged in, no target drone, voice locked, etc)."""
+        tid = TRACE.get() or new_trace("js" if source == "joystick" else "ag")
         if not self.link.logged_in:
-            raise DispatchError("Not logged in to Captain")
-        if source == "voice" and not self.gate.unlocked:
-            raise DispatchError("Voice control is locked")
-        if source == "joystick" and not (self.monitor and self.monitor.info["present"]):
-            raise DispatchError("No joystick detected")
-        drone = drone_id or self.target
-        if not drone:
-            raise DispatchError("No target drone selected")
-        cmd = build_action(action, drone, source_hint=source)          # takeoff_alt fixed 25
-        log.info("sending command to Captain via POST /command: %s source=%s",
-                 cmd["label"], source)
+            refusal = "Not logged in to Captain"
+        elif source == "voice" and not self.gate.unlocked:
+            refusal = "Voice control is locked"
+        elif source == "joystick" and not (self.monitor and self.monitor.info["present"]):
+            refusal = "No joystick detected"
+        else:
+            refusal = None
+        if refusal:
+            self._trace(tid, "send", ok=False, action=action, source=source, detail=refusal)
+            raise DispatchError(refusal)
+
+        # NOTE: no `drone is None` refusal — Captain decides which drone to target.
+        drone = drone_id or self.target or ""
+        cmd = build_action(action, drone, source_hint=source)
+        cmd["trace_id"] = tid
+        self._trace(tid, "send", ok=True, action=action, drone=drone or "(auto)", source=source)
+        log.info("sending command to Captain via POST /command: %s source=%s trace=%s drone=%r",
+                cmd["label"], source, tid, drone or "(auto)")
+        t0 = time.monotonic()
         try:
             res = await self.link.send_command(cmd)
         except CaptainError as exc:
-            log.warning("Captain POST /command failed: %s source=%s detail=%r",
-                        cmd["label"], source, exc.detail)
+            ms = int((time.monotonic() - t0) * 1000)
+            # Friendly translation for the two common Captain-side refusals.
+            friendly = exc.detail
+            if "missing droneId" in (exc.detail or ""):
+                friendly = "No drone selected on Captain — click a drone on the map, then repeat the command"
+            self._trace(tid, "captain", ok=False, http=exc.status, ms=ms, detail=friendly)
             self.hub.emit({"type": "command.result", "ok": False, "label": cmd["label"],
-                           "source": source, "detail": exc.detail})
-            raise DispatchError(exc.detail) from None
+                        "source": source, "detail": friendly, "trace": tid})
+            raise DispatchError(friendly) from None
+        ms = int((time.monotonic() - t0) * 1000)
+        echoed = res.get("trace") if isinstance(res, dict) else None
+        self._trace(tid, "captain", ok=True, http=200, ms=ms, linked=(echoed == tid), echoed=echoed)
         detail = f"{cmd['label']} accepted by Captain"
-        log.info("Captain accepted command via POST /command: %s source=%s",
-                 cmd["label"], source)
+        log.info("Captain accepted command via POST /command: %s source=%s trace=%s (%d ms)",
+                cmd["label"], source, tid, ms)
         self.hub.emit({"type": "command.result", "ok": True, "label": cmd["label"],
-                       "source": source, "detail": detail})
-        return {"detail": detail, "result": res.get("result")}
+                    "source": source, "detail": detail, "trace": tid, "ms": ms})
+        return {"detail": detail, "result": res.get("result"), "trace": tid}
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2. request bodies — REPLACE the existing TranscriptBody, ADD SttEventBody
+# ─────────────────────────────────────────────────────────────────────────────
+
+class SttEventBody(BaseModel):
+    kind: str                             # "started" | "stopped" | "error"
+    detail: str = ""
+    engine: str = ""
 
 # ── request bodies ───────────────────────────────────────────────────────────
 
@@ -387,9 +464,10 @@ class NavModeBody(BaseModel):
 class SettingBody(BaseModel):
     value: dict
     password: Optional[str] = None
-class TranscriptBody(BaseModel): 
-    text: str; 
+class TranscriptBody(BaseModel):
+    text: str
     final: bool = True
+    engine: Optional[str] = None          # which browser engine produced it (for the trace)
 class UnlockBody(BaseModel):
     password: Optional[str] = None
     voice_wav_b64: Optional[str] = None
@@ -729,29 +807,31 @@ def create_app(cfg: Config, *, engines: Optional[dict] = None, backend_factory: 
         # 2) Face match + voice weak-but-present → accept (face carries identity)
         # 3) Face match + voice sample too short to score → accept (short phrase)
         # 4) Anything else → reject with the specific failure
-        face_carries_identity = face_ok and vcfg.get("face_assist_voice_commands", True)
+        face_carries_identity = bool(face_ok) and vcfg.get("face_assist_voice_commands", True)
+        has_voice = bool(stored.get("voice"))
 
-        if voice_ok:
-            pass                                            # case 1
+        if has_voice and voice_ok:
+            pass                                            # strong voice match
         elif face_carries_identity:
-            pass                                            # cases 2 / 3
+            pass                                            # face carries identity
+        elif not has_voice and not stored.get("face"):
+            raise HTTPException(409, "no biometric template enrolled")
+        elif not has_voice:
+            raise HTTPException(422, f"face does not match ({face_score:.3f})")                                       # cases 2 / 3
         else:
             if face_ok is False and voice_ok is False:
-                raise HTTPException(422,
-                    f"neither face ({face_score:.3f}) nor voice ({voice_score:.3f}) matched")
+                raise HTTPException(422,                    f"neither face ({face_score:.3f}) nor voice ({voice_score:.3f}) matched")
             if voice_ok is False:
-                raise HTTPException(422,
-                    f"voice does not match your enrolled voiceprint: {voice_reason} "
+                raise HTTPException(422,                    f"voice does not match your enrolled voiceprint: {voice_reason} "
                     f"(score {voice_score:.3f}, threshold {vcfg.get('voice_threshold', 0.75):.2f})")
             if not stored.get("voice") and not stored.get("face"):
-                raise HTTPException(409,
-                    "no biometric template enrolled — ask a Captain admin to enrol face or voice first")
+                raise HTTPException(409,                    "no biometric template enrolled — ask a Captain admin to enrol face or voice first")
             raise HTTPException(422, "verification failed — no usable sample")
 
         try:
             if body.dry_run:    
                 return {"ok": True, "score": voice_score if voice_ok else face_score, "match": voice_ok or face_ok}
-            entry = voice_commands.add_or_update( agent.link.user["username"], phrase, body.action, )
+            entry = voice_commands.add_or_update( agent.link.user["username"], phrase, body.action, wake_word=agent.settings.get("voice", {}).get("wake_word", "captain"),)
         except ValueError as exc:
             raise HTTPException(422, str(exc))
 
@@ -764,22 +844,16 @@ def create_app(cfg: Config, *, engines: Optional[dict] = None, backend_factory: 
     @app.post("/api/voice/precheck")
     @captain_errors
     async def voice_precheck(body: VoicePrecheckBody):
-        """Verify a recording against the enrolled template WITHOUT saving it.
-        Used by the Voice tab to color the recorder indicator green/red
-        before Save is pressed. Same verify path as /api/voice/assign."""
         need_login()
-        engine = agent.engines["voice"]["engine"]
-        if engine is None:
-            raise HTTPException(409, agent.engines["voice"]["reason"] or "voice engine unavailable")
         stored = await agent.link.my_biometrics()
-        if not stored.get("voice"):
-            raise HTTPException(409, "no voiceprint enrolled for this account")
+        has_voice = bool(stored.get("voice"))
+        has_face  = bool(stored.get("face"))
+        if not has_voice and not has_face:
+            raise HTTPException(409, "no biometric template enrolled")
 
         vcfg = agent.settings.get("verification", {})
-
-        # Optional face assist
         face_ok, face_score = False, 0.0
-        if body.face_jpeg_b64 and stored.get("face"):
+        if body.face_jpeg_b64 and has_face:
             feng = agent.engines["face"]["engine"]
             if feng is not None:
                 face_ok, face_score, _ = await run_in_threadpool(
@@ -787,16 +861,26 @@ def create_app(cfg: Config, *, engines: Optional[dict] = None, backend_factory: 
                     threshold=vcfg.get("face_threshold", feng.threshold),
                 )
 
-        # Voice with relaxed threshold if face passed
+        # No voiceprint at all → the face is the only signal. Accept if it matched.
+        if not has_voice:
+            ok = face_ok and vcfg.get("face_assist_voice_commands", True)
+            return {"ok": ok, "voice_ok": None, "voice_score": 0.0,
+                    "voice_message": "no voiceprint enrolled — face only",
+                    "face_ok": face_ok, "face_score": round(face_score, 3),
+                    "threshold": round(vcfg.get("face_threshold", 0.363), 3)}
+
+        # Existing voice-first path (unchanged)
+        engine = agent.engines["voice"]["engine"]
+        if engine is None:
+            raise HTTPException(409, agent.engines["voice"]["reason"] or "voice engine unavailable")
         thresh = (vcfg.get("voice_threshold_with_face", 0.45)
                 if face_ok and vcfg.get("face_assist_voice_commands", True)
                 else vcfg.get("voice_threshold", engine.threshold))
         voice_ok, voice_score, voice_msg = await run_in_threadpool(
             verify, engine, _b64(body.data_b64), stored["voice"], threshold=thresh,
         )
-
         return {
-            "ok":            voice_ok or (face_ok and vcfg.get("face_assist_voice_commands", True)),
+            "ok":            voice_ok or face_ok,
             "voice_ok":      voice_ok,
             "voice_score":   round(voice_score, 3),
             "voice_message": voice_msg,
@@ -805,23 +889,10 @@ def create_app(cfg: Config, *, engines: Optional[dict] = None, backend_factory: 
             "threshold":     round(thresh, 3),
         }
 
-
-    @app.post("/api/voice/transcript")
-    @captain_errors
-    async def transcript(body: TranscriptBody):
-        need_login()
-        text = body.text[:300]
-        log.info("voice transcript received (final=%s): %r", body.final, text)
-        res = await agent.voice.handle(text, final=body.final)
-        log.info("voice transcript result: status=%s action=%s drone_id=%s detail=%r",
-                 res.status, res.action or "-", res.drone_id or "-", res.detail)
-        if res.status != "ignored" or body.final:
-            agent.hub.emit({"type": "voice.heard", **res.as_dict()})
-        return res.as_dict()
-
     @app.post("/api/voice/lock")
     async def voice_lock():
         agent.gate.lock()
+        log.info("voice gate locked")
         agent.hub.emit({"type": "voice.gate", **agent.gate.snapshot()})
         return agent.gate.snapshot()
 
@@ -831,6 +902,7 @@ def create_app(cfg: Config, *, engines: Optional[dict] = None, backend_factory: 
         need_login()
         wait = agent.limiter.blocked_for()
         if wait:
+            log.warning("voice unlock throttled wait_s=%d", wait)
             raise HTTPException(429, f"Too many failed attempts — try again in {wait} s")
         required = agent.settings["voice"]["unlock_factors"]
         results, stored, any_failed = {}, None, False
@@ -855,12 +927,84 @@ def create_app(cfg: Config, *, engines: Optional[dict] = None, backend_factory: 
         if unlocked:
             agent.limiter.reset()
             agent.gate.unlock(required)
+            log.info("voice unlock succeeded factors=%s", required)
             agent.hub.emit({"type": "voice.gate", **agent.gate.snapshot()})
         elif any_failed:
             agent.limiter.fail()
+            log.warning("voice unlock failed factors=%s",
+                        {factor: result["ok"] for factor, result in results.items()})
         return {"unlocked": unlocked, "factors": results, "gate": agent.gate.snapshot()}
 
     # ── voice commands (local registry) ────────────────────────────────────
+    @app.post("/api/voice/transcript")
+    @captain_errors
+    async def transcript(body: TranscriptBody):
+        need_login()
+        text = body.text[:300]
+        log.info("voice transcript received (final=%s): %r", body.final, text)
+        if not body.final:                       # interim text is never traced and never acted on
+            return (await agent.voice.handle(text, final=False)).as_dict()
+
+        engine = (body.engine or agent.settings["voice"]["stt_engine"])[:32]
+        # A spoken "confirm"/"cancel" continues the trace of the sentence it answers.
+        continuing = agent.voice.pending is not None and agent.pending_trace is not None
+        tid = agent.pending_trace if continuing else new_trace("vc")
+        agent._trace_begin(tid, text, engine)
+
+        token = TRACE.set(tid)                   # Agent.execute() reads this
+        try:
+            res = await agent.voice.handle(text, final=True)
+        finally:
+            TRACE.reset(token)
+        agent._trace(tid, "verdict", status=res.status, action=res.action,
+                     drone=res.drone_id, detail=res.detail)
+        if res.status == "needs_confirm":
+            agent.pending_trace = tid
+        elif agent.voice.pending is None:
+            agent.pending_trace = None
+
+        log.info("voice transcript result: trace=%s status=%s action=%s drone_id=%s detail=%r",
+                 tid, res.status, res.action or "-", res.drone_id or "-", res.detail)
+        agent.hub.emit({"type": "voice.heard", **res.as_dict(), "trace": tid})
+        return {**res.as_dict(), "trace": tid}
+
+    @app.post("/api/voice/confirm")
+    @captain_errors
+    async def voice_confirm(body: ConfirmBody):
+        need_login()
+        tid = agent.pending_trace or new_trace("vc")
+        agent.pending_trace = None
+        agent._trace_begin(tid, "(confirm button)" if body.ok else "(cancel button)", "button", count=False)
+        token = TRACE.set(tid)
+        try:
+            res = await agent.voice.confirm(body.ok, then_action=body.then_action)
+        finally:
+            TRACE.reset(token)
+        agent._trace(tid, "verdict", status=res.status, action=res.action,
+                     drone=res.drone_id, detail=res.detail)
+        agent.hub.emit({"type": "voice.heard", **res.as_dict(), "trace": tid})
+        return {**res.as_dict(), "trace": tid}
+
+    @app.post("/api/voice/stt_event")
+    async def voice_stt_event(body: SttEventBody):
+        """The browser reports its speech engine starting, stopping or failing — the only
+        way the agent can tell 'nothing was said' from 'the engine is dead'."""
+        need_login()
+        try:
+            ev = agent.traces.stt_event(body.kind, body.detail, body.engine)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+        if ev is not None:                       # None = repeat of the same error inside 5 s
+            agent.hub.emit({"type": "voice.stt", **ev})
+        return {"ok": True}
+
+    @app.get("/api/voice/trace")
+    async def get_voice_trace(limit: int = 30):
+        need_login()
+        return agent.traces.snapshot(max(1, min(limit, 100)))
+
+
+    
     @app.get("/api/voice/commands")
     async def list_voice_commands():
         need_login()
@@ -901,6 +1045,7 @@ def create_app(cfg: Config, *, engines: Optional[dict] = None, backend_factory: 
             "type": "voice.commands.changed",
             "commands": voice_commands.list_user(agent.link.user["username"]),
         })
+        log.info("voice command added action=%s phrase=%r", body.action, body.phrase.strip())
         return entry
 
     @app.delete("/api/voice/commands/{entry_id}")
@@ -908,6 +1053,7 @@ def create_app(cfg: Config, *, engines: Optional[dict] = None, backend_factory: 
         need_login()
         if not voice_commands.remove(agent.link.user["username"], entry_id):
             raise HTTPException(404, "voice command not found")
+        log.info("voice command removed id=%s", entry_id)
         agent.hub.emit({
             "type": "voice.commands.changed",
             "commands": voice_commands.list_user(agent.link.user["username"]),
@@ -949,15 +1095,11 @@ def create_app(cfg: Config, *, engines: Optional[dict] = None, backend_factory: 
             "type": "voice.commands.changed",
             "commands": voice_commands.list_user(agent.link.user["username"]),
         })
+        log.info("voice command updated id=%s action=%s phrase=%r",
+                 entry_id, body.action, body.phrase.strip())
         return entry
 
-    @app.post("/api/voice/confirm")
-    @captain_errors
-    async def voice_confirm(body: ConfirmBody):
-        need_login()
-        res = await agent.voice.confirm(body.ok, then_action=body.then_action)
-        agent.hub.emit({"type": "voice.heard", **res.as_dict()})
-        return res.as_dict()
+
 
     # ── register (admin) ───────────────────────────────────────────────────
 
@@ -1128,13 +1270,18 @@ def create_app(cfg: Config, *, engines: Optional[dict] = None, backend_factory: 
     return app, agent
 
 
+
+
+
+
+
+
+
+
 if __name__ == "__main__":
     import threading
     import webbrowser
     import uvicorn
-    import logging
-
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     cfg = Config.build(port=None, captain=None, open_browser=True)
     app, agent = create_app(cfg)
     url = agent.guard.launch_url()

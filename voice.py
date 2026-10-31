@@ -18,11 +18,14 @@ Layers a spoken command passes, in order:
 from __future__ import annotations
 
 import re
+import logging
 import time
 from dataclasses import dataclass, asdict
 from typing import Awaitable, Callable, Optional
 
 from .commands import ACTIONS
+
+log = logging.getLogger(__name__)
 
 _VERBS: dict[str, tuple[str, ...]] = {
     "arm":     ("arm", "arm motors"),
@@ -195,6 +198,7 @@ class VoiceController:
         try:
             entry = self._local_match(text)
         except Exception:
+            log.exception("custom voice command lookup failed")
             return None
         if entry:
             return (entry["action"], None, entry["phrase"])
@@ -209,6 +213,7 @@ class VoiceController:
                 try:
                     entry = self._local_match(stripped)
                 except Exception:
+                    log.exception("custom voice command lookup failed after drone suffix removal")
                     entry = None
                 if entry:
                     return (entry["action"], drone, entry["phrase"])
@@ -218,11 +223,13 @@ class VoiceController:
         if not final or not normalize(text):
             return VoiceResult("ignored", text)
         norm = normalize(text)
+        log.debug("processing final voice transcript normalized=%r", norm)
 
         # Pending-confirm window must expire cleanly
         if self._pending and self._clock() >= self._pending[3]:
             self._pending = None
             if norm in _CONFIRM:
+                log.info("voice confirmation expired")
                 return VoiceResult("expired", text,
                                 detail="confirmation window passed — say the command again")
 
@@ -256,15 +263,20 @@ class VoiceController:
             if custom:
                 action, drone_from_phrase, phrase = custom
                 if not self.gate.unlocked:
+                    log.info("voice command locked action=%s source=custom", action)
                     return VoiceResult("locked", text, action, drone_from_phrase,
                                     "voice control is locked — unlock it first")
                 drone = drone_from_phrase or self._resolve_drone(None)
                 if isinstance(drone, VoiceResult):
                     drone.text = text; drone.action = action
+                    log.warning("custom voice command rejected action=%s detail=%s",
+                                action, drone.detail)
                     return drone
                 if ACTIONS[action].confirm:
                     window = int(self._settings().get("confirm_window_s", 8))
                     self._pending = (action, drone, text, self._clock() + window)
+                    log.info("custom voice command needs confirmation action=%s drone=%s window_s=%d phrase=%r",
+                             action, drone, window, phrase)
                     return VoiceResult("needs_confirm", text, action, drone,
                                     f"say 'confirm' within {window} s to "
                                     f"{ACTIONS[action].label.lower()} drone {drone}")
@@ -273,47 +285,80 @@ class VoiceController:
         # ── Built-in grammar (unchanged) ──
         action, spoken, wake_ok2 = self._parse(text)
         if action is None or not wake_ok2:
+            log.info("voice transcript ignored reason=%s",
+                     "missing_wake_word" if not wake_ok2 else "no_command_match")
             return VoiceResult("ignored", text)
         if not self.gate.unlocked:
+            log.info("voice command locked action=%s source=builtin", action)
             return VoiceResult("locked", text, action, spoken, "voice control is locked — unlock it first")
         drone = self._resolve_drone(spoken)
         if isinstance(drone, VoiceResult):
             drone.text, drone.action = text, action
+            log.warning("voice command rejected action=%s detail=%s", action, drone.detail)
             return drone
         self._pending = None
         if ACTIONS[action].confirm:
             window = int(self._settings().get("confirm_window_s", 8))
             self._pending = (action, drone, text, self._clock() + window)
+            log.info("voice command needs confirmation action=%s drone=%s window_s=%d",
+                     action, drone, window)
             return VoiceResult("needs_confirm", text, action, drone,
                                f"say 'confirm' within {window} s to "
                                f"{ACTIONS[action].label.lower()} drone {drone}")
         return await self._run(action, drone, text)
 
     def _resolve_drone(self, spoken: Optional[str]):
+        """Return the concrete drone id, or None to mean 'Captain will pick one'.
+        A rejected VoiceResult is only returned for an *unresolvable explicit*
+        request (e.g. spoken='99' when 99 doesn't exist)."""
         known = self._known()
         if spoken is None:
             default = self._default()
-            if not default:
-                return VoiceResult("rejected", "", detail="no target drone — pick one in the agent or say 'drone <id>'")
-            return default
+            return default or None                     # ← no rejection, just None
+
         by_lower = {k.lower(): k for k in known}
-        if known and spoken.lower() not in by_lower:
-            return VoiceResult("rejected", "", drone_id=spoken, detail=f"unknown drone {spoken!r}")
-        return by_lower.get(spoken.lower(), spoken)
+        if spoken.lower() in by_lower:
+            return by_lower[spoken.lower()]
+
+        # Fuzzy: "2" should match "drone_2", "DRONE-2", "drone2", "drone2-x", etc.
+        import re as _re
+        digits = _re.sub(r"\D", "", spoken)
+        if digits:
+            for k in known:
+                if _re.sub(r"\D", "", k) == digits:
+                    log.debug("voice drone target resolved spoken=%r drone=%s", spoken, k)
+                    return k
+            # Also try a numeric suffix match on the last segment.
+            for k in known:
+                m = _re.search(r"(\d+)$", k)
+                if m and m.group(1) == digits:
+                    log.debug("voice drone target resolved by suffix spoken=%r drone=%s", spoken, k)
+                    return k
+
+        detail = f"unknown drone {spoken!r} — known: {', '.join(known) or 'none'}"
+        log.warning("voice drone target rejected spoken=%r known=%s", spoken, known)
+        return VoiceResult("rejected", "", drone_id=spoken, detail=detail)
+
+        
 
     async def confirm(self, ok: bool, text: str = "", then_action: Optional[str] = None) -> VoiceResult:
         pend, self._pending = self._pending, None
         if pend is None or self._clock() >= pend[3]:
+            log.info("voice confirmation expired or no pending command")
             return VoiceResult("expired", text, detail="nothing waiting for confirmation")
         action, drone, original, _ = pend
         if not ok:
             if then_action in ACTIONS:
                 if not self.gate.unlocked:
+                    log.info("voice follow-up command locked action=%s", then_action)
                     return VoiceResult("locked", text or original, then_action, drone, "voice control locked while waiting")
                 return await self._run(then_action, drone, text or original)
+            log.info("voice command cancelled action=%s drone=%s", action, drone)
             return VoiceResult("cancelled", text or original, action, drone, "cancelled")
         if not self.gate.unlocked:
+            log.info("confirmed voice command rejected because gate relocked action=%s", action)
             return VoiceResult("locked", text or original, action, drone, "voice control locked while waiting")
+        log.info("voice command confirmed action=%s drone=%s", action, drone)
         return await self._run(action, drone, text or original)
 
 
@@ -321,6 +366,9 @@ class VoiceController:
         try:
             result = await self._execute(action, drone, "voice")
         except Exception as exc:                       # Captain refusal, network, no session ...
+            log.exception("voice command execution failed action=%s drone=%s", action, drone)
             return VoiceResult("rejected", text, action, drone, str(exc))
         self.gate.touch()
-        return VoiceResult("executed", text, action, drone, str(result.get("detail", "")) if isinstance(result, dict) else "")
+        detail = str(result.get("detail", "")) if isinstance(result, dict) else ""
+        log.info("voice command executed action=%s drone=%s detail=%r", action, drone, detail)
+        return VoiceResult("executed", text, action, drone, detail)

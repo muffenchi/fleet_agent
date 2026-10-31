@@ -7,10 +7,13 @@ because phrases are operator-local configuration.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 from pathlib import Path
 from typing import Optional
+
+log = logging.getLogger(__name__)
 
 DB_PATH = Path.home() / ".fleet_agent" / "voice_commands.json"
 
@@ -18,15 +21,26 @@ DB_PATH = Path.home() / ".fleet_agent" / "voice_commands.json"
 def _load() -> dict:
     try:
         return json.loads(DB_PATH.read_text())
-    except (OSError, ValueError):
+    except FileNotFoundError:
+        log.debug("voice command registry does not exist yet path=%s", DB_PATH)
+        return {"version": 1, "users": {}}
+    except json.JSONDecodeError:
+        log.exception("voice command registry contains invalid JSON path=%s", DB_PATH)
+        return {"version": 1, "users": {}}
+    except OSError:
+        log.exception("voice command registry could not be read path=%s", DB_PATH)
         return {"version": 1, "users": {}}
 
 
 def _save(data: dict) -> None:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    tmp = DB_PATH.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, indent=2, sort_keys=True))
-    tmp.replace(DB_PATH)
+    try:
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = DB_PATH.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data, indent=2, sort_keys=True))
+        tmp.replace(DB_PATH)
+    except OSError:
+        log.exception("voice command registry could not be saved path=%s", DB_PATH)
+        raise
 
 
 def normalize(text: str) -> str:
@@ -59,6 +73,7 @@ def add(username: str, phrase: str, action: str) -> dict:
     }
     lst.append(entry)
     _save(data)
+    log.info("voice command registry added id=%s action=%s", entry["id"], action)
     return entry
 
 def update(username: str, entry_id: str, phrase: str, action: str) -> dict:
@@ -84,6 +99,7 @@ def update(username: str, entry_id: str, phrase: str, action: str) -> dict:
     entry["normalized"] = norm
     entry["action"]     = action
     _save(data)
+    log.info("voice command registry updated id=%s action=%s", entry_id, action)
     return entry
 
 
@@ -94,6 +110,7 @@ def remove(username: str, entry_id: str) -> bool:
         if e["id"] == entry_id:
             del lst[i]
             _save(data)
+            log.info("voice command registry removed id=%s", entry_id)
             return True
     return False
 
@@ -105,12 +122,16 @@ def match(username: str, text: str) -> Optional[dict]:
         return None
     for entry in _load()["users"].get(username, []):
         if entry["normalized"] == norm:
+            log.info("custom voice command matched action=%s id=%s",
+                     entry["action"], entry["id"])
             return entry
+    log.debug("no custom voice command matched normalized=%r", norm)
     return None
 
-def add_or_update(username: str, phrase: str, action: str) -> dict:
+def add_or_update(username: str, phrase: str, action: str, *, wake_word: str = "captain") -> dict:
     """One phrase per action. Re-uses the entry's id when replacing."""
     data = _load()
+    phrase = strip_wake_word(phrase, wake_word)      # ← strip before normalising
     norm = normalize(phrase)
     if not norm:
         raise ValueError("phrase must contain at least one word")
@@ -125,6 +146,8 @@ def add_or_update(username: str, phrase: str, action: str) -> dict:
             existing["phrase"]     = phrase.strip()
             existing["normalized"] = norm
             _save(data)
+            log.info("voice command registry replaced action=%s id=%s",
+                     action, existing["id"])
             return existing
 
     entry = {
@@ -136,4 +159,19 @@ def add_or_update(username: str, phrase: str, action: str) -> dict:
     }
     lst.append(entry)
     _save(data)
+    log.info("voice command registry added id=%s action=%s", entry["id"], action)
     return entry
+
+
+def strip_wake_word(phrase: str, wake_word: str = "captain") -> str:
+    """Normalise a phrase by removing a leading wake word, so a phrase
+    saved as 'captain arm the drone' matches the runtime which strips the
+    wake word before comparing."""
+    norm = normalize(phrase)
+    wake = normalize(wake_word)
+    if not wake:
+        return norm
+    for prefix in (f"hey {wake} ", f"{wake} "):
+        if norm.startswith(prefix):
+            return norm[len(prefix):].strip()
+    return norm

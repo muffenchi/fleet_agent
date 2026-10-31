@@ -158,89 +158,76 @@ export function initVoice({ api, state, bus, toast }) {
     return listEngines().some((e) => e.name === name && e.available);
   }
 
+ 
   function startListening(origin = 'manual') {
-    if (listening) return;
-    if (!sttAvailable()) {
-      $('listen-note').textContent = 'Speech engine not available';
-      return;
-    }
-    try {
-      engine = createEngine($('stt-engine').value, {
-        language: settings().language,
-        onState: (s) => {
-          listening = s === 'listening';
-          $('listen-btn').textContent = listening ? 'Stop listening' : 'Start listening';
-          if (listening) {
-            userManuallyStopped = false;
-            showVoiceBar();
-            startMicMeter();
-            updateActivityBar({
-              heard: '—', match: '', result: '·', resultClass: 'dim',
-            });
-          } else {
-            hideVoiceBar();
-          }
-        },
-        onError: (m) => { $('listen-note').textContent = m; },
-        onResult: ({ text, final }) => {
-          if (!text) return;
-          if (!final) {
-            // Live intermediate — proves to the operator the engine is capturing
-            updateActivityBar({
-              heard: `"${text}…"`,
-              match: '',
-              result: '…', resultClass: 'dim',
-            });
-          } else {
-            updateActivityBar({
-              heard: `"${text}"`,
-              match: 'matching…',
-              result: '…', resultClass: 'warn',
-            });
-            api('POST', '/api/voice/transcript', { text, final: true })
-              .catch((e) => toast(e.message, 'bad'));
-          }
-          $('listen-note').textContent = final ? '' : `Hearing: ${text}`;
-        },
-      });
-      $('listen-note').textContent = origin === 'auto'
-        ? 'Listening automatically — say a registered command.'
-        : '';
-      engine.start();
-    } catch (e) {
-      $('listen-note').textContent = e.message;
-    }
+      if (listening) return;
+      // Clean up any previously-attempted engine that never reached 'listening'
+      if (engine) { try { engine.stop(); } catch {} engine = null; }
+      if (!sttAvailable()) {
+          $('listen-note').textContent = 'Speech engine not available';
+          return;
+      }
+      try {
+          engine = createEngine($('stt-engine').value, {
+              language: settings().language,
+              onState: (s) => {
+                  listening = s === 'listening';
+                  $('listen-btn').textContent = listening ? 'Stop listening' : 'Start listening';
+                  if (listening) {
+                      userManuallyStopped = false;
+                      showVoiceBar();
+                      startMicMeter();
+                      updateActivityBar({ heard: '—', match: '', result: '·', resultClass: 'dim' });
+                  } else {
+                      hideVoiceBar();
+                  }
+              },
+              onError: (m) => { $('listen-note').textContent = m; 
+                              if (/network|offline|unreachable/i.test(m)) {
+                                      $('listen-note').textContent =
+                                          'Speech engine requires an internet connection — this laptop is offline. '
+                                        + 'Switch to a local STT engine or connect to the internet.';
+                                      flashVoiceBar('bad', 'offline', 4000);
+                                  }
+
+                               },
+              onResult: ({ text, final }) => { /* as before */ },
+          });
+          $('listen-note').textContent = origin === 'auto'
+              ? 'Listening automatically — say a registered command.'
+              : '';
+          engine.start();
+      } catch (e) {
+          engine = null;
+          $('listen-note').textContent = e.message;
+      }
   }
 
   function stopListening() {
-    if (!listening || !engine) return;
-    userManuallyStopped = true;
-    try { engine.stop(); } catch {}
-    listening = false;
-    $('listen-btn').textContent = 'Start listening';
-    hideVoiceBar();
+      if (!engine) return;
+      userManuallyStopped = true;
+      try { engine.stop(); } catch {}
+      engine = null;
+      listening = false;
+      $('listen-btn').textContent = 'Start listening';
+      hideVoiceBar();
   }
 
-  // Auto-start policy: whenever logged in and the operator hasn't pressed Stop,
-  // STT runs continuously — every tab sees the bar.
   function syncStt() {
-    if (!state.status?.captain?.logged_in) {
-      if (listening) stopListening();
-      return;
-    }
-    if (userManuallyStopped) return;
-    if (!listening) startListening('auto');
+      if (!state.status?.captain?.logged_in) { if (listening) stopListening(); return; }
+      if (userManuallyStopped) return;
+      if (listening || engine) return;      // ← prevents the pile-up
+      startListening('auto');
   }
 
-  $('listen-btn').addEventListener('click', () => {
-    if (listening) stopListening();
-    else startListening('manual');
-  });
+  
 
   $('listen-btn').addEventListener('click', () => {
     if (listening) stopListening();
     else startListening('manual');
   });
+
+
 
   // ── voice command table ──────────────────────────────────────────────
   let localCommands = {};
@@ -420,6 +407,14 @@ export function initVoice({ api, state, bus, toast }) {
   }
 
   async function doRecord() {
+    // Pause the main listening engine so the recorder's audio doesn't also get transcribed as a live command.
+    const wasListening = listening;
+    if (wasListening && engine) {
+        try { engine.stop(); } catch {}
+        engine = null;
+        listening = false;
+        $('listen-btn').textContent = 'Start listening';
+    }
     $('vc-record').disabled = true;
     $('vc-record').textContent = 'Stop';
     $('vc-phrase-input').value = '';
@@ -483,6 +478,9 @@ export function initVoice({ api, state, bus, toast }) {
     $('vc-phrase-input').value = recorderPhrase;
     $('vc-record-state').textContent = 'Captured. Checking against your voiceprint…';
     await precheckVoice();
+    if (wasListening && !userManuallyStopped) {
+        setTimeout(() => startListening('auto'), 400);
+    }
   }
 
   async function precheckVoice() {
@@ -528,6 +526,7 @@ export function initVoice({ api, state, bus, toast }) {
     try {
       recorderFaceB64 = await captureFace(state.status.settings.camera.device_id);
       $('vc-face-state').textContent = 'Face captured.';
+      $('vc-face-capture').classList.add('has-face');
       if (recorderWavB64) await precheckVoice();
     } catch (e) {
       recorderFaceB64 = null;

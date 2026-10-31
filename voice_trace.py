@@ -18,15 +18,17 @@ reported by the browser, finals received) because that is the part nobody can
 see today: a browser engine that never starts, or dies on "network", looks
 identical to "nothing was said".
 
-Everything here lives in laptop memory only. Overheard sentences that are not
-commands are kept in this ring buffer (and the console log) but are never sent
-to Captain.
+The ring buffer lives in laptop memory; every event is *also* appended as one
+JSON line to a trace file so a post-mortem survives a restart. Overheard
+sentences that are not commands stay in the ring buffer and the trace file —
+they are never sent to Captain.
 """
 from __future__ import annotations
 
 import contextvars
 import json
 import logging
+import os
 import secrets
 import time
 from collections import OrderedDict
@@ -35,11 +37,27 @@ from typing import Any, Optional
 
 log = logging.getLogger(__name__)
 
+#: Default trace-file location. FLEET_AGENT_TRACE_FILE overrides it; an empty
+#: value disables the file (memory-only). Reliability fix: tracing used to be
+#: opt-in via an env var nobody set, so after a crash/restart there was nothing
+#: left on disk to inspect.
+DEFAULT_TRACE_FILE = str(Path.home() / ".fleet_agent" / "voice_trace.jsonl")
+
+
+def resolve_trace_file(env_value: Optional[str] = None) -> Optional[str]:
+    """Trace-file path from the environment, defaulting to ~/.fleet_agent/.
+    Returns None only when FLEET_AGENT_TRACE_FILE is explicitly set to ""."""
+    if env_value is None:
+        env_value = os.environ.get("FLEET_AGENT_TRACE_FILE")
+    if env_value is not None:
+        return env_value.strip() or None
+    return DEFAULT_TRACE_FILE
+
 #: Set by the HTTP handler around VoiceController.handle(); read by Agent.execute()
 #: so the command that goes to Captain carries the id of the sentence that caused it.
 TRACE: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("fleet_agent_trace", default=None)
 
-STT_KINDS = ("started", "stopped", "error")
+STT_KINDS = ("started", "stopped", "error", "fallback")
 _STATUSES = ("ignored", "locked", "needs_confirm", "executed", "rejected", "cancelled", "expired")
 
 
@@ -49,12 +67,14 @@ def new_trace(prefix: str = "vc") -> str:
 
 class TraceLog:
     def __init__(self, keep: int = 100, coalesce_s: float = 5.0, clock=time.monotonic, wall=time.time,
-                 file_path: Optional[str] = None) -> None:
+                 file_path: Optional[str] = None, max_bytes: int = 5_000_000) -> None:
         self.keep, self.coalesce_s, self._clock, self._wall = keep, coalesce_s, clock, wall
+        self.max_bytes = max_bytes
         self._items: "OrderedDict[str, dict]" = OrderedDict()
-        # Optional persistent trace file (the in-memory ring buffer alone is not
-        # enough when the browser never delivers a final transcript — after a
-        # restart nothing is left to inspect). Set FLEET_AGENT_TRACE_FILE to use it.
+        # Persistent trace file (the in-memory ring buffer alone is not enough
+        # when the browser never delivers a final transcript — after a restart
+        # nothing is left to inspect). Defaults to ~/.fleet_agent/voice_trace.jsonl;
+        # pass file_path=None + env FLEET_AGENT_TRACE_FILE="" only to disable it.
         self._file = Path(file_path).expanduser() if file_path else None
         if self._file:
             try:
@@ -71,10 +91,13 @@ class TraceLog:
 
     def _write(self, record: dict) -> None:
         """Append one JSON line to the trace file (best effort — tracing must
-        never break the voice pipeline)."""
+        never break the voice pipeline). Rotates at max_bytes so a long-lived
+        agent cannot fill the laptop's disk."""
         if not self._file:
             return
         try:
+            if self.max_bytes and self._file.exists() and self._file.stat().st_size > self.max_bytes:
+                self._file.replace(self._file.with_name(self._file.name + ".1"))
             with self._file.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
         except OSError:
@@ -144,28 +167,35 @@ class TraceLog:
     # ── speech-engine health, reported by the browser ──────────────────
     def stt_event(self, kind: str, detail: str = "", engine: str = "") -> Optional[dict]:
         """Returns the event to broadcast, or None if it was a repeat inside the
-        coalescing window (Chrome restarts a failing engine in a tight loop)."""
+        coalescing window (Chrome restarts a failing engine in a tight loop).
+        Reliability fix: 'stopped' is coalesced as well — Chrome's cloud engine
+        ends every silence-bounded session with onend, which used to bury real
+        errors under an endless stream of stopped events."""
         if kind not in STT_KINDS:
             raise ValueError(f"kind must be one of {STT_KINDS}")
         now = self._clock()
-        if kind == "error":
+        if kind in ("error", "stopped"):
             last_kind, last_detail, last_at = self._last_err
-            if detail == last_detail and now - last_at < self.coalesce_s:
-                self.stt["errors"] += 1
-                log.debug("coalesced repeated speech-engine error engine=%r detail=%r",
-                          engine or self.stt["engine"], detail)
+            if kind == last_kind and detail == last_detail and now - last_at < self.coalesce_s:
+                if kind == "error":
+                    self.stt["errors"] += 1
+                log.debug("coalesced repeated speech-engine %s engine=%r detail=%r",
+                          kind, engine or self.stt["engine"], detail)
                 return None
-            self._last_err = ("error", detail, now)
+            self._last_err = (kind, detail, now)
+        if kind == "error":
             self.stt["errors"] += 1
             self.stt["last_error"] = detail[:200]
-        self.stt["state"] = {"started": "listening", "stopped": "stopped", "error": "error"}[kind]
+        self.stt["state"] = {"started": "listening", "stopped": "stopped",
+                             "error": "error", "fallback": "fallback"}[kind]
         self.stt["last_event_ts"] = self._wall()
         if engine:
             self.stt["engine"] = engine[:32]
         ev = {"kind": kind, "detail": detail[:200], "engine": self.stt["engine"]}
         self._write({"ts": self._wall(), "stage": "stt", **ev})
-        log.log(logging.ERROR if kind == "error" else logging.INFO,
-                "speech engine %s engine=%r detail=%r", kind, self.stt["engine"], detail[:200])
+        level = logging.ERROR if kind == "error" else (
+            logging.WARNING if kind == "fallback" else logging.INFO)
+        log.log(level, "speech engine %s engine=%r detail=%r", kind, self.stt["engine"], detail[:200])
         return ev
 
     # ── read side ──────────────────────────────────────────────────────

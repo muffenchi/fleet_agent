@@ -23,7 +23,7 @@ if not __package__:
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. imports — next to the other `from .x import y` lines at the top of server.py
 # ─────────────────────────────────────────────────────────────────────────────
-from .voice_trace import TRACE, TraceLog, new_trace
+from .voice_trace import TRACE, TraceLog, new_trace, resolve_trace_file
 
 from typing import Callable, Optional
 
@@ -41,6 +41,7 @@ from .commands      import ACTIONS, PSEUDO_ACTIONS, build_action   # add PSEUDO_
 from .config        import Config
 from .joystick      import JoystickMapper, JoystickMonitor, PygameBackend
 from .security      import COOKIE, Guard
+from .stt_local     import LocalStt
 from .voice         import VoiceController, VoiceGate, _VERBS
 
 WWW = Path(__file__).resolve().parent / "www"
@@ -50,7 +51,10 @@ LOG_FILE = Path(os.environ.get(
     "FLEET_AGENT_LOG_FILE", str(Path.home() / ".fleet_agent" / "fleet_agent.log")
 )).expanduser()
 
-TRACE_FILE = os.environ.get("FLEET_AGENT_TRACE_FILE", "")   # empty = traces stay in memory only
+# Voice trace file: ON BY DEFAULT (~/.fleet_agent/voice_trace.jsonl) so a crash
+# or restart always leaves evidence on disk. FLEET_AGENT_TRACE_FILE overrides the
+# path; set it to "" only if you deliberately want memory-only tracing.
+TRACE_FILE = resolve_trace_file()
 
 
 def _configure_logging() -> None:
@@ -155,7 +159,10 @@ class Agent:
         self.gate = VoiceGate(self.settings["voice"]["unlock_ttl_s"])
         self.limiter = AttemptLimiter()
         self.enrollments = EnrollmentStore()
-        self.traces = TraceLog(file_path=TRACE_FILE or None)
+        self.traces = TraceLog(file_path=TRACE_FILE)
+        # Offline STT backup so a "speech engine offline" browser failure is
+        # not the end of the voice pipeline (see stt_local.py + www/js/stt/local.js).
+        self.local_stt = LocalStt()
         self.pending_trace: Optional[str] = None   # trace id of the sentence awaiting "confirm"
         self.monitor: Optional[JoystickMonitor] = None
         self.pad_watchers = 0
@@ -267,7 +274,15 @@ class Agent:
                         "presence": self.link.presence},
             "joystick": {**info, "nav_mode": self.mapper.nav_mode,
                         "error": self.monitor.backend_error if self.monitor else None},
-            "voice":    {"gate": self.gate.snapshot(), "pending": self.voice.pending},
+            "voice":    {"gate": self.gate.snapshot(), "pending": self.voice.pending,
+                        # STT health + trace-file path ride along in every status
+                        # snapshot so the UI and any log reader can tell
+                        # "engine dead" from "nothing was said".
+                        "stt": dict(self.traces.stt),
+                        "trace_file": str(self.traces._file) if self.traces._file else None,
+                        "local_stt": {"backend": self.local_stt.backend,
+                                      "available": self.local_stt.available,
+                                      "reason": self.local_stt.reason}},
             "engines":  {k: {"available": v["engine"] is not None, "reason": v["reason"],
                             "needed_samples": getattr(v["engine"], "needed_samples", None)}
                         for k, v in self.engines.items()},
@@ -449,7 +464,7 @@ class Agent:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class SttEventBody(BaseModel):
-    kind: str                             # "started" | "stopped" | "error"
+    kind: str                             # "started" | "stopped" | "error" | "fallback"
     detail: str = ""
     engine: str = ""
 
@@ -514,6 +529,9 @@ class VoiceAssignBody(BaseModel):
 class VoicePrecheckBody(BaseModel):
     data_b64:      str
     face_jpeg_b64: Optional[str] = None
+class TranscribeBody(BaseModel):
+    data_b64: str                       # 16 kHz mono 16-bit WAV of one utterance
+    language: str = "en-US"
 
 def create_app(cfg: Config, *, engines: Optional[dict] = None, backend_factory: Callable = PygameBackend, guard: Optional[Guard] = None):
     if engines is None:
@@ -1004,6 +1022,29 @@ def create_app(cfg: Config, *, engines: Optional[dict] = None, backend_factory: 
     async def get_voice_trace(limit: int = 30):
         need_login()
         return agent.traces.snapshot(max(1, min(limit, 100)))
+
+    # ── local offline STT (browser fallback when the cloud engine is dead) ──
+    @app.post("/api/stt/transcribe")
+    async def stt_transcribe(body: TranscribeBody):
+        """The browser's `local` engine POSTs one utterance (16 kHz mono WAV);
+        we run a local model on it and return the text. The command decision
+        still happens in /api/voice/transcript — this endpoint only hears."""
+        need_login()
+        if len(body.data_b64) > MAX_B64:
+            raise HTTPException(413, "audio sample too large")
+        try:
+            text = await run_in_threadpool(agent.local_stt.transcribe,
+                                           _b64(body.data_b64), body.language)
+        except RuntimeError as exc:                 # no backend installed → actionable message
+            agent.traces.stt_event("error", str(exc), "local")
+            raise HTTPException(503, str(exc)) from None
+        except Exception as exc:
+            log.exception("local transcription failed")
+            detail = f"Local transcription failed: {type(exc).__name__}: {exc}"
+            agent.traces.stt_event("error", detail, "local")
+            raise HTTPException(500, detail) from None
+        log.info("local STT transcribed backend=%s chars=%d", agent.local_stt.backend, len(text))
+        return {"text": text, "backend": agent.local_stt.backend}
 
 
     

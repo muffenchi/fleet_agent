@@ -25,10 +25,12 @@ to Captain.
 from __future__ import annotations
 
 import contextvars
+import json
 import logging
 import secrets
 import time
 from collections import OrderedDict
+from pathlib import Path
 from typing import Any, Optional
 
 log = logging.getLogger(__name__)
@@ -46,14 +48,37 @@ def new_trace(prefix: str = "vc") -> str:
 
 
 class TraceLog:
-    def __init__(self, keep: int = 100, coalesce_s: float = 5.0, clock=time.monotonic, wall=time.time) -> None:
+    def __init__(self, keep: int = 100, coalesce_s: float = 5.0, clock=time.monotonic, wall=time.time,
+                 file_path: Optional[str] = None) -> None:
         self.keep, self.coalesce_s, self._clock, self._wall = keep, coalesce_s, clock, wall
         self._items: "OrderedDict[str, dict]" = OrderedDict()
+        # Optional persistent trace file (the in-memory ring buffer alone is not
+        # enough when the browser never delivers a final transcript — after a
+        # restart nothing is left to inspect). Set FLEET_AGENT_TRACE_FILE to use it.
+        self._file = Path(file_path).expanduser() if file_path else None
+        if self._file:
+            try:
+                self._file.parent.mkdir(parents=True, exist_ok=True)
+                log.info("voice-trace file enabled path=%s", self._file)
+            except OSError:
+                log.exception("voice-trace file could not be prepared path=%s", self._file)
+                self._file = None
         self.counters: dict[str, int] = {k: 0 for k in
                                          ("final", *_STATUSES, "other", "captain_ok", "captain_fail", "unlinked")}
         self.stt: dict[str, Any] = {"engine": "", "state": "unknown", "errors": 0, "finals": 0,
                                     "last_error": "", "last_event_ts": None, "last_final_ts": None}
         self._last_err: tuple[str, str, float] = ("", "", 0.0)
+
+    def _write(self, record: dict) -> None:
+        """Append one JSON line to the trace file (best effort — tracing must
+        never break the voice pipeline)."""
+        if not self._file:
+            return
+        try:
+            with self._file.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+        except OSError:
+            log.exception("voice-trace file write failed path=%s", self._file)
 
     # ── per-utterance trace ────────────────────────────────────────────
     def begin(self, tid: str, text: str, engine: str = "", count: bool = True) -> dict:
@@ -88,6 +113,7 @@ class TraceLog:
             while len(self._items) > self.keep:
                 self._items.popitem(last=False)
         item["stages"].append({"stage": name, **ev})
+        self._write({"ts": self._wall(), "id": tid, "stage": name, **ev})
         if name == "verdict":
             st = fields.get("status", "")
             self.counters[st if st in _STATUSES else "other"] += 1
@@ -136,9 +162,11 @@ class TraceLog:
         self.stt["last_event_ts"] = self._wall()
         if engine:
             self.stt["engine"] = engine[:32]
+        ev = {"kind": kind, "detail": detail[:200], "engine": self.stt["engine"]}
+        self._write({"ts": self._wall(), "stage": "stt", **ev})
         log.log(logging.ERROR if kind == "error" else logging.INFO,
                 "speech engine %s engine=%r detail=%r", kind, self.stt["engine"], detail[:200])
-        return {"kind": kind, "detail": detail[:200], "engine": self.stt["engine"]}
+        return ev
 
     # ── read side ──────────────────────────────────────────────────────
     def snapshot(self, limit: int = 30) -> dict:

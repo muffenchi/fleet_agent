@@ -21,6 +21,14 @@ export function initVoice({ api, state, bus, toast }) {
   let recorderFaceB64   = null;
   let recorderAbort     = null;
   let sttEngineForRecord = null;
+  let recorderOpening   = false;   // true between clicking Set and the mic actually being granted
+
+  // One-line STT health report for the agent log / trace file: without it,
+  // "the browser engine never started" is indistinguishable from "nothing was said".
+  function reportStt(kind, detail = '', engineName = '') {
+    api('POST', '/api/voice/stt_event', { kind, detail: String(detail).slice(0, 200), engine: engineName })
+      .catch(() => {});   // best effort — never break the voice flow over a telemetry POST
+  }
 
   // Activity bar state
   let micMeter       = null;
@@ -178,6 +186,7 @@ export function initVoice({ api, state, bus, toast }) {
                   const wasListening = listening;
                   listening = s === 'listening';
                   $('listen-btn').textContent = listening ? 'Stop listening' : 'Start listening';
+                  reportStt(listening ? 'started' : 'stopped', '', $('stt-engine').value);
                   if (listening) {
                       userManuallyStopped = false;
                       showVoiceBar();
@@ -193,6 +202,7 @@ export function initVoice({ api, state, bus, toast }) {
               },
               onError: (m) => {
                   $('listen-note').textContent = m;
+                  reportStt('error', m, $('stt-engine').value);
                   if (/internet|network|offline|unreachable/i.test(m)) {
                       $('listen-note').textContent =
                           'Speech engine requires an internet connection — this laptop is offline. '
@@ -210,7 +220,7 @@ export function initVoice({ api, state, bus, toast }) {
                       updateActivityBar({ heard: `"${text}…"`, match: '', result: '…', resultClass: 'dim' });
                   } else {
                       updateActivityBar({ heard: `"${text}"`, match: 'matching…', result: '…', resultClass: 'warn' });
-                      api('POST', '/api/voice/transcript', { text, final: true })
+                      api('POST', '/api/voice/transcript', { text, final: true, engine: $('stt-engine').value })
                         .catch((e) => {
                             updateActivityBar({ match: '', result: '✗', resultClass: 'bad', flashClass: 'bad' });
                             toast(e.message, 'bad');

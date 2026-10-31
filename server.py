@@ -554,9 +554,9 @@ def create_app(cfg: Config, *, engines: Optional[dict] = None, backend_factory: 
 
         elapsed_ms = (time.monotonic() - started) * 1000
         if resp.status_code >= 500:
-            log.warning("%s %s -> %d (%.1f ms)", request.method, request.url.path, resp.status_code, elapsed_ms)
+              log.warning("%s %s -> %d (%.1f ms)", request.method, request.url.path, resp.status_code, elapsed_ms)
         else:
-            log.info("%s %s -> %d (%.1f ms)", request.method, request.url.path, resp.status_code, elapsed_ms)
+            # log.info("%s %s -> %d (%.1f ms)", request.method, request.url.path, resp.status_code, elapsed_ms)
         return resp
   
     def captain_errors(fn):
@@ -1095,8 +1095,7 @@ def create_app(cfg: Config, *, engines: Optional[dict] = None, backend_factory: 
             "type": "voice.commands.changed",
             "commands": voice_commands.list_user(agent.link.user["username"]),
         })
-        log.info("voice command updated id=%s action=%s phrase=%r",
-                 entry_id, body.action, body.phrase.strip())
+        log.info("voice command updated id=%s action=%s phrase=%r", entry_id, body.action, body.phrase.strip())
         return entry
 
 
@@ -1118,8 +1117,7 @@ def create_app(cfg: Config, *, engines: Optional[dict] = None, backend_factory: 
             }
             for u in users
         ]
-        log.info("GET /api/register/users -> %d user(s)  names=%s",
-                 len(mapped), [m["username"] for m in mapped][:5])
+        # log.info("GET /api/register/users -> %d user(s)  names=%s", len(mapped), [m["username"] for m in mapped][:5])
         return mapped
 
     @app.post("/api/register/preview")

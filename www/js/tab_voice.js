@@ -76,7 +76,11 @@ export function initVoice({ api, state, bus, toast }) {
     const el = $('voice-activity');
     if (!el || el.classList.contains('hidden')) return;
     if (heard !== undefined) {
-      const h = $('va-heard'); if (h) h.textContent = heard;
+      const h = $('va-heard');
+      if (h) {
+        h.textContent = heard.length > 40 ? '…' + heard.slice(-40) : heard;
+        h.title = heard;
+      }
     }
     if (match !== undefined) {
       const m = $('va-match'); if (m) m.textContent = match;
@@ -171,27 +175,49 @@ export function initVoice({ api, state, bus, toast }) {
           engine = createEngine($('stt-engine').value, {
               language: settings().language,
               onState: (s) => {
+                  const wasListening = listening;
                   listening = s === 'listening';
                   $('listen-btn').textContent = listening ? 'Stop listening' : 'Start listening';
                   if (listening) {
                       userManuallyStopped = false;
                       showVoiceBar();
                       startMicMeter();
-                      updateActivityBar({ heard: '—', match: '', result: '·', resultClass: 'dim' });
+                      // Reset only on a genuine start. Chrome silently restarts the session every
+                      // few seconds; that must not wipe the text / 🔒 the operator is reading.
+                      if (!wasListening) {
+                          updateActivityBar({ heard: '—', match: '', result: '·', resultClass: 'dim' });
+                      }
                   } else {
                       hideVoiceBar();
                   }
               },
-              onError: (m) => { $('listen-note').textContent = m; 
-                              if (/network|offline|unreachable/i.test(m)) {
-                                      $('listen-note').textContent =
-                                          'Speech engine requires an internet connection — this laptop is offline. '
-                                        + 'Switch to a local STT engine or connect to the internet.';
-                                      flashVoiceBar('bad', 'offline', 4000);
-                                  }
-
-                               },
-              onResult: ({ text, final }) => { /* as before */ },
+              onError: (m) => {
+                  $('listen-note').textContent = m;
+                  if (/internet|network|offline|unreachable/i.test(m)) {
+                      $('listen-note').textContent =
+                          'Speech engine requires an internet connection — this laptop is offline. '
+                        + 'Switch to a local STT engine or connect to the internet.';
+                      updateActivityBar({
+                          heard: 'speech engine offline', match: '',
+                          result: '✗', resultClass: 'bad',
+                          flashClass: 'bad', flashMs: 4000,
+                      });
+                  }
+              },
+              onResult: ({ text, final }) => {
+                  if (!text) return;
+                  if (!final) {
+                      updateActivityBar({ heard: `"${text}…"`, match: '', result: '…', resultClass: 'dim' });
+                  } else {
+                      updateActivityBar({ heard: `"${text}"`, match: 'matching…', result: '…', resultClass: 'warn' });
+                      api('POST', '/api/voice/transcript', { text, final: true })
+                        .catch((e) => {
+                            updateActivityBar({ match: '', result: '✗', resultClass: 'bad', flashClass: 'bad' });
+                            toast(e.message, 'bad');
+                        });
+                  }
+                  $('listen-note').textContent = final ? '' : `Hearing: ${text}`;
+              },
           });
           $('listen-note').textContent = origin === 'auto'
               ? 'Listening automatically — say a registered command.'
@@ -202,6 +228,7 @@ export function initVoice({ api, state, bus, toast }) {
           $('listen-note').textContent = e.message;
       }
   }
+
 
   function stopListening() {
       if (!engine) return;
@@ -714,7 +741,7 @@ export function initVoice({ api, state, bus, toast }) {
         break;
       case 'expired':
         updateActivityBar({
-          result: '⏱', resultClass: 'warn',
+          match: '',result: '⏱', resultClass: 'warn',
           flashClass: 'warn', flashMs: 1500,
         });
         break;
